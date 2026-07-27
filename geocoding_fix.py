@@ -4,6 +4,8 @@ import asyncio
 import re
 
 import httpx
+from telegram.constants import ParseMode
+from telegram.ext import ConversationHandler
 
 import app as base
 
@@ -36,7 +38,6 @@ def address_variants(text: str) -> list[str]:
     else:
         variants.append(f"{cleaned}, Україна")
 
-    # Nominatim frequently resolves Ukrainian streets better with comma-separated house numbers.
     match = re.match(r"^(.+?)\s+(\d+[а-яА-Яa-zA-Z]?)$", cleaned)
     if match:
         variants.append(f"{match.group(1)}, {match.group(2)}, Україна")
@@ -97,4 +98,34 @@ async def resolve_point(text: str):
     return None
 
 
+async def location(update, context):
+    if await base.deny(update, context):
+        return ConversationHandler.END
+
+    message = update.effective_message
+    if message.location:
+        lat, lon, label = (
+            message.location.latitude,
+            message.location.longitude,
+            "Надіслана геолокація",
+        )
+    elif message.text:
+        result = await resolve_point(message.text)
+        if not result:
+            await message.reply_text("Уточніть адресу")
+            return base.WAIT_LOCATION
+        lat, lon, label = result
+    else:
+        return base.WAIT_LOCATION
+
+    context.user_data["point"] = {"lat": lat, "lon": lon, "label": label}
+    await message.reply_text(
+        f"БС: <code>{lat:.7f}, {lon:.7f}</code>\n"
+        "Введіть азимут, наприклад <code>90</code>, або азимут і радіус: <code>90 15</code>.",
+        parse_mode=ParseMode.HTML,
+    )
+    return base.WAIT_AZIMUTH
+
+
 base.resolve_point = resolve_point
+base.location = location
