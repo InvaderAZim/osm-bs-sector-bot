@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from fastapi import Request
 from fastapi.responses import HTMLResponse
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
@@ -11,6 +11,7 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes, MessageHandler, f
 import launcher as bot
 
 PICKER_URL = f"{bot.settings().public_url}/picker"
+PICKER_FILE = Path(__file__).resolve().parent / "templates" / "picker.html"
 
 
 def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
@@ -86,8 +87,13 @@ def build_bot():
 
 
 @bot.api.get("/picker", response_class=HTMLResponse)
-async def picker_page(request: Request):
-    return bot.templates.TemplateResponse("picker.html", {"request": request})
+async def picker_page():
+    try:
+        html = PICKER_FILE.read_text(encoding="utf-8")
+    except OSError as exc:
+        bot.log.exception("Picker HTML file is unavailable")
+        return HTMLResponse("Карта тимчасово недоступна", status_code=503)
+    return HTMLResponse(content=html, status_code=200)
 
 
 bot.main_keyboard = main_keyboard
