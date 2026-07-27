@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import ParseMode
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import server as preview_server
 import ui_buttons
@@ -21,34 +28,74 @@ async def controlled_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 base.deny = controlled_deny
 
 
+async def first_start_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перший /start: контакт -> заявка -> очікування погодження."""
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None:
+        raise ApplicationHandlerStop
+
+    user_control.record_user(user)
+
+    if user_control.has_access(user.id):
+        # Схваленого користувача пропускаємо до звичайного сценарію /start.
+        return
+
+    row = user_control.get_user(user.id)
+    if row and row["status"] == "blocked":
+        await message.reply_text(
+            "⛔ У доступі до бота відмовлено адміністратором.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    elif row and row["phone_number"]:
+        await message.reply_text(
+            "⏳ Ваш контакт уже надіслано адміністратору. Очікуйте погодження.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await message.reply_text(
+            "🔐 Для отримання доступу натисніть кнопку нижче та надішліть свій контакт.",
+            reply_markup=user_control.contact_keyboard(),
+        )
+
+    # Не дозволяємо ConversationHandler паралельно запускати побудову сектора.
+    raise ApplicationHandlerStop
+
+
 async def contact_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     user = update.effective_user
     contact = message.contact if message else None
     if user is None or contact is None:
-        return
+        raise ApplicationHandlerStop
 
     if user_control.has_access(user.id):
         await message.reply_text(
             "✅ Доступ уже надано. Оберіть дію нижче.",
             reply_markup=ui_buttons.keyboard_for_user(user.id),
         )
-        return
+        raise ApplicationHandlerStop
 
     if contact.user_id != user.id:
         await message.reply_text(
-            "Потрібно надіслати саме власний контакт через кнопку бота.",
+            "⚠️ Потрібно надіслати саме власний контакт через кнопку бота.",
             reply_markup=user_control.contact_keyboard(),
         )
-        return
+        raise ApplicationHandlerStop
 
     phone_number = contact.phone_number.strip()
+    row = user_control.get_user(user.id)
+    already_sent = bool(row and row["phone_number"] == phone_number and row["status"] == "pending")
+
     user_control.save_contact(user, phone_number)
-    await user_control.notify_admins(context, user, phone_number)
+    if not already_sent:
+        await user_control.notify_admins(context, user, phone_number)
+
     await message.reply_text(
-        "✅ Контакт отримано. Заявку передано адміністратору. Очікуйте підтвердження.",
+        "✅ Контакт надіслано адміністратору на погодження. Очікуйте рішення.",
         reply_markup=ReplyKeyboardRemove(),
     )
+    raise ApplicationHandlerStop
 
 
 async def access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -181,6 +228,7 @@ _original_build_bot = base.build_bot
 
 def controlled_build_bot():
     application = _original_build_bot()
+    application.add_handler(CommandHandler("start", first_start_gate), group=-3)
     application.add_handler(MessageHandler(filters.CONTACT, contact_request), group=-2)
     application.add_handler(CallbackQueryHandler(access_callback, pattern=r"^access:"), group=-1)
     application.add_handler(CommandHandler("users", users_command), group=-1)
