@@ -18,7 +18,7 @@
 ```env
 TELEGRAM_BOT_TOKEN=8789151694:AAGIlOMm03GJxPYUaZlY4T5-n3TvpB3sS_Q
 PUBLIC_BASE_URL=https://публічна-адреса-сервера
-MAP_SECRET=довгий-випадковий-рядок
+MAP_SECRET=f91c8472d0334a0f978c21e6ab81d9906c57eabc47d831a
 DEFAULT_RADIUS_KM=15
 ALLOWED_TELEGRAM_USER_IDS=
 NOMINATIM_USER_AGENT=OSM-BS-Sector-Telegram-Bot/1.0 (contact: email@example.com)
