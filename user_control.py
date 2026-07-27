@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, User
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update, User
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -40,6 +40,7 @@ def init_db() -> None:
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
+                phone_number TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 first_seen TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
@@ -47,6 +48,9 @@ def init_db() -> None:
             )
             """
         )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)")}
+        if "phone_number" not in columns:
+            connection.execute("ALTER TABLE users ADD COLUMN phone_number TEXT")
         for user_id in ADMIN_IDS | STATIC_ALLOWED_IDS:
             connection.execute(
                 """
@@ -62,26 +66,27 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
-def get_status(user_id: int) -> str | None:
+def get_user(user_id: int) -> sqlite3.Row | None:
     with connect() as connection:
-        row = connection.execute(
-            "SELECT status FROM users WHERE user_id=?", (user_id,)
-        ).fetchone()
+        return connection.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+
+
+def get_status(user_id: int) -> str | None:
+    row = get_user(user_id)
     return str(row["status"]) if row else None
 
 
 def record_user(user: User, increment_usage: bool = False) -> str:
-    current_status = get_status(user.id)
+    row = get_user(user.id)
     default_status = "approved" if user.id in ADMIN_IDS | STATIC_ALLOWED_IDS else "pending"
     with connect() as connection:
-        if current_status is None:
+        if row is None:
             connection.execute(
                 """
                 INSERT INTO users(user_id, username, first_name, last_name, status, first_seen, last_seen, usage_count)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user.id, user.username, user.first_name, user.last_name,
-                 default_status, now(), now(), 1 if increment_usage else 0),
+                (user.id, user.username, user.first_name, user.last_name, default_status, now(), now(), 1 if increment_usage else 0),
             )
             return default_status
         connection.execute(
@@ -89,10 +94,18 @@ def record_user(user: User, increment_usage: bool = False) -> str:
             UPDATE users SET username=?, first_name=?, last_name=?, last_seen=?,
             usage_count=usage_count + ? WHERE user_id=?
             """,
-            (user.username, user.first_name, user.last_name, now(),
-             1 if increment_usage else 0, user.id),
+            (user.username, user.first_name, user.last_name, now(), 1 if increment_usage else 0, user.id),
         )
-    return current_status
+    return str(row["status"])
+
+
+def save_contact(user: User, phone_number: str) -> None:
+    record_user(user)
+    with connect() as connection:
+        connection.execute(
+            "UPDATE users SET phone_number=?, status='pending', last_seen=? WHERE user_id=?",
+            (phone_number, now(), user.id),
+        )
 
 
 def set_status(user_id: int, status: str) -> None:
@@ -110,8 +123,6 @@ def set_status(user_id: int, status: str) -> None:
 
 
 def has_access(user_id: int) -> bool:
-    if not ADMIN_IDS and not STATIC_ALLOWED_IDS:
-        return True
     if user_id in ADMIN_IDS | STATIC_ALLOWED_IDS:
         return True
     return get_status(user_id) == "approved"
@@ -121,28 +132,37 @@ def users(limit: int = 50) -> list[sqlite3.Row]:
     with connect() as connection:
         return connection.execute(
             """
-            SELECT user_id, username, first_name, last_name, status, usage_count, last_seen
+            SELECT user_id, username, first_name, last_name, phone_number, status, usage_count, last_seen
             FROM users ORDER BY last_seen DESC LIMIT ?
             """,
             (limit,),
         ).fetchall()
 
 
-async def notify_admins(context: ContextTypes.DEFAULT_TYPE, user: User) -> None:
+def contact_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📱 Надіслати свій контакт", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Надішліть власний контакт",
+    )
+
+
+async def notify_admins(context: ContextTypes.DEFAULT_TYPE, user: User, phone_number: str) -> None:
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Дозволити", callback_data=f"access:approved:{user.id}"),
-        InlineKeyboardButton("⛔ Заблокувати", callback_data=f"access:blocked:{user.id}"),
+        InlineKeyboardButton("⛔ Відмовити", callback_data=f"access:blocked:{user.id}"),
     ]])
     username = f"@{user.username}" if user.username else "без username"
     text = (
         "<b>Нова заявка на доступ</b>\n"
-        f"{user.full_name} · {username}\nID: <code>{user.id}</code>"
+        f"{user.full_name} · {username}\n"
+        f"Телефон: <code>{phone_number}</code>\n"
+        f"Telegram ID: <code>{user.id}</code>"
     )
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(
-                admin_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard
-            )
+            await context.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
         except Exception:
             pass
 
@@ -151,17 +171,18 @@ async def ensure_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     user = update.effective_user
     if user is None:
         return False
-    previous = get_status(user.id)
-    status = record_user(user)
+    record_user(user)
     if has_access(user.id):
         return True
+    row = get_user(user.id)
     if update.effective_message:
-        if status == "blocked":
-            await update.effective_message.reply_text("⛔ Доступ заблоковано адміністратором.")
+        if row and row["status"] == "blocked":
+            await update.effective_message.reply_text("⛔ У доступі відмовлено адміністратором.")
+        elif row and row["phone_number"]:
+            await update.effective_message.reply_text("⏳ Заявка вже надіслана. Очікуйте рішення адміністратора.")
         else:
             await update.effective_message.reply_text(
-                "🔐 Заявку на доступ передано адміністратору."
+                "🔐 Для отримання доступу надішліть свій контакт кнопкою нижче.",
+                reply_markup=contact_keyboard(),
             )
-    if status == "pending" and previous is None:
-        await notify_admins(context, user)
     return False
