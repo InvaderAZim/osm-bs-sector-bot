@@ -27,6 +27,8 @@ async def access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("Недостатньо прав", show_alert=True)
         return
 
+    user_control.record_user(query.from_user, increment_usage=True)
+
     try:
         _, status, user_id_raw = (query.data or "").split(":", 2)
         user_id = int(user_id_raw)
@@ -56,6 +58,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text("Команда доступна лише адміністратору.")
         return
 
+    # Оновлюємо ПІБ/username адміністратора з актуального Telegram-профілю.
+    user_control.record_user(user, increment_usage=True)
+
     rows = user_control.users()
     if not rows:
         await update.effective_message.reply_text("Користувачів ще немає.")
@@ -66,9 +71,10 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     for row in rows:
         name = " ".join(filter(None, [row["first_name"], row["last_name"]])) or "Без імені"
         username = f"@{row['username']}" if row["username"] else "без username"
+        admin_mark = " · 👑 адміністратор" if user_control.is_admin(row["user_id"]) else ""
         lines.append(
-            f"{icons.get(row['status'], '•')} <b>{name}</b> · {username}\n"
-            f"ID: <code>{row['user_id']}</code> · запусків: {row['usage_count']}"
+            f"{icons.get(row['status'], '•')} <b>{name}</b> · {username}{admin_mark}\n"
+            f"ID: <code>{row['user_id']}</code> · дій: {row['usage_count']}"
         )
 
     text = "\n\n".join(lines)
@@ -93,6 +99,9 @@ async def set_status_command(
     if user is None or not user_control.is_admin(user.id):
         await update.effective_message.reply_text("Команда доступна лише адміністратору.")
         return
+
+    user_control.record_user(user, increment_usage=True)
+
     if not context.args:
         command = "/approve ID" if status == "approved" else "/block ID"
         await update.effective_message.reply_text(f"Формат: {command}")
