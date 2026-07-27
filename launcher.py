@@ -6,6 +6,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, Mes
 
 import server as preview_server
 import ui_buttons
+import address_example
 import user_control
 
 base = preview_server.base
@@ -132,9 +133,7 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await set_status_command(update, context, "blocked")
 
 
-async def set_status_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, status: str
-) -> None:
+async def set_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE, status: str) -> None:
     user = update.effective_user
     if user is None or not user_control.is_admin(user.id):
         await update.effective_message.reply_text("Команда доступна лише адміністратору.")
