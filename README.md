@@ -16,7 +16,7 @@
 Скопіюйте `.env.example` у `.env` і заповніть:
 
 ```env
-TELEGRAM_BOT_TOKEN=токен_від_BotFather
+TELEGRAM_BOT_TOKEN=8789151694:AAGIlOMm03GJxPYUaZlY4T5-n3TvpB3sS_Q
 PUBLIC_BASE_URL=https://публічна-адреса-сервера
 MAP_SECRET=довгий-випадковий-рядок
 DEFAULT_RADIUS_KM=15
