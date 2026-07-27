@@ -9,17 +9,23 @@ async def manual_location_prompt(update, context):
     if ui_buttons.is_duplicate(context, "manual-location", 1.5):
         return ui_buttons.base.WAIT_LOCATION
     await update.effective_message.reply_text(
-        "Введіть адресу, координати або посилання на карту.\n\n"
-        "Приклад адреси: <code>Житомир, вул. Грушевського, 5</code>",
+        "Введіть адресу у довільному форматі, координати або посилання на карту.\n\n"
+        "Приклади:\n"
+        "<code>Житомир Грушевського 5</code>\n"
+        "<code>Грушевського 5, Житомир</code>\n"
+        "<code>м. Житомир, вул. Грушевського, буд. 5</code>",
         parse_mode="HTML",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(ui_buttons.BTN_BACK), KeyboardButton(ui_buttons.BTN_CANCEL)]],
             resize_keyboard=True,
             is_persistent=True,
-            input_field_placeholder="Житомир, вул. Грушевського, 5",
+            input_field_placeholder="Наприклад: Житомир Грушевського 5",
         ),
     )
     return ui_buttons.base.WAIT_LOCATION
 
 
 ui_buttons.manual_location_prompt = manual_location_prompt
+
+# Підключає кнопку вибору довільної точки на інтерактивній карті.
+import location_picker  # noqa: E402,F401
