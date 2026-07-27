@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: osm-bs-sector-bot
+    runtime: docker
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: MAP_SECRET
+        generateValue: true
+      - key: DEFAULT_RADIUS_KM
+        value: "15"
+      - key: ALLOWED_TELEGRAM_USER_IDS
+        sync: false
+      - key: NOMINATIM_USER_AGENT
+        sync: false
