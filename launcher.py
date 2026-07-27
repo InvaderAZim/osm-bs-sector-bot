@@ -5,6 +5,7 @@ from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 import server as preview_server
+import ui_buttons
 import user_control
 
 base = preview_server.base
@@ -27,8 +28,8 @@ async def contact_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if user_control.has_access(user.id):
         await message.reply_text(
-            "✅ Доступ уже надано. Натисніть «Старт».",
-            reply_markup=base.main_keyboard(),
+            "✅ Доступ уже надано. Оберіть дію нижче.",
+            reply_markup=ui_buttons.keyboard_for_user(user.id),
         )
         return
 
@@ -76,8 +77,8 @@ async def access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if status == "approved":
             await context.bot.send_message(
                 user_id,
-                "✅ Доступ до бота дозволено. Натисніть кнопку «Старт» нижче.",
-                reply_markup=base.main_keyboard(),
+                "✅ Доступ до бота дозволено. Оберіть дію нижче.",
+                reply_markup=ui_buttons.keyboard_for_user(user_id),
             )
         else:
             await context.bot.send_message(
@@ -117,7 +118,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = "\n\n".join(lines)
     for start in range(0, len(text), 3900):
         await update.effective_message.reply_text(
-            text[start:start + 3900], parse_mode=ParseMode.HTML
+            text[start:start + 3900],
+            parse_mode=ParseMode.HTML,
+            reply_markup=ui_buttons.admin_keyboard(),
         )
 
 
@@ -153,14 +156,15 @@ async def set_status_command(
     await update.effective_message.reply_text(
         f"Статус користувача <code>{target_id}</code> змінено на <b>{status}</b>.",
         parse_mode=ParseMode.HTML,
+        reply_markup=ui_buttons.admin_keyboard(),
     )
 
     try:
         if status == "approved":
             await context.bot.send_message(
                 target_id,
-                "✅ Доступ до бота дозволено. Натисніть кнопку «Старт» нижче.",
-                reply_markup=base.main_keyboard(),
+                "✅ Доступ до бота дозволено. Оберіть дію нижче.",
+                reply_markup=ui_buttons.keyboard_for_user(target_id),
             )
         else:
             await context.bot.send_message(
@@ -180,6 +184,7 @@ def controlled_build_bot():
     application.add_handler(MessageHandler(filters.CONTACT, contact_request), group=-2)
     application.add_handler(CallbackQueryHandler(access_callback, pattern=r"^access:"), group=-1)
     application.add_handler(CommandHandler("users", users_command), group=-1)
+    application.add_handler(MessageHandler(filters.Regex(f"^{ui_buttons.BTN_USERS}$"), users_command), group=-1)
     application.add_handler(CommandHandler("approve", approve_command), group=-1)
     application.add_handler(CommandHandler("block", block_command), group=-1)
     return application
