@@ -41,13 +41,19 @@ async def access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.edit_message_text(
         f"{label}\nID: <code>{user_id}</code>", parse_mode=ParseMode.HTML
     )
+
     try:
-        message = (
-            "✅ Адміністратор дозволив доступ до бота. Натисніть /start."
-            if status == "approved"
-            else "⛔ Адміністратор заблокував доступ до бота."
-        )
-        await context.bot.send_message(user_id, message)
+        if status == "approved":
+            await context.bot.send_message(
+                user_id,
+                "✅ Доступ до бота дозволено. Натисніть кнопку «Старт» нижче.",
+                reply_markup=base.main_keyboard(),
+            )
+        else:
+            await context.bot.send_message(
+                user_id,
+                "⛔ Адміністратор заблокував доступ до бота.",
+            )
     except Exception:
         pass
 
@@ -58,9 +64,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text("Команда доступна лише адміністратору.")
         return
 
-    # Оновлюємо ПІБ/username адміністратора з актуального Telegram-профілю.
     user_control.record_user(user, increment_usage=True)
-
     rows = user_control.users()
     if not rows:
         await update.effective_message.reply_text("Користувачів ще немає.")
@@ -111,18 +115,25 @@ async def set_status_command(
     except ValueError:
         await update.effective_message.reply_text("ID має бути числом.")
         return
+
     user_control.set_status(target_id, status)
     await update.effective_message.reply_text(
         f"Статус користувача <code>{target_id}</code> змінено на <b>{status}</b>.",
         parse_mode=ParseMode.HTML,
     )
+
     try:
-        message = (
-            "✅ Доступ до бота дозволено. Натисніть /start."
-            if status == "approved"
-            else "⛔ Доступ до бота заблоковано."
-        )
-        await context.bot.send_message(target_id, message)
+        if status == "approved":
+            await context.bot.send_message(
+                target_id,
+                "✅ Доступ до бота дозволено. Натисніть кнопку «Старт» нижче.",
+                reply_markup=base.main_keyboard(),
+            )
+        else:
+            await context.bot.send_message(
+                target_id,
+                "⛔ Доступ до бота заблоковано.",
+            )
     except Exception:
         pass
 
