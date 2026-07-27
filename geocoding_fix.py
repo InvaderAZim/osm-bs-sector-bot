@@ -15,38 +15,97 @@ CITY_ALIASES = {
     "коростень": "Коростень, Житомирська область, Україна",
 }
 
-STREET_WORDS = (
-    "вул.", "вулиця", "просп.", "проспект", "пров.", "провулок",
-    "бульвар", "шосе", "площа", "майдан", "набережна",
-)
+STREET_PREFIXES = {
+    "вул": "вулиця", "вул.": "вулиця", "улица": "вулиця", "ул": "вулиця", "ул.": "вулиця",
+    "просп": "проспект", "просп.": "проспект", "пр-т": "проспект",
+    "пров": "провулок", "пров.": "провулок", "пер": "провулок", "пер.": "провулок",
+}
+
+
+def normalize_address(text: str) -> str:
+    value = text.strip()
+    value = re.sub(r"[;|]+", ",", value)
+    value = re.sub(r"\b(м\.?|місто)\s+", "", value, flags=re.I)
+    value = re.sub(r"\b(буд\.?|будинок|дом|д\.)\s*", "", value, flags=re.I)
+    value = re.sub(r"\s*,\s*", ", ", value)
+    value = re.sub(r"\s+", " ", value)
+    return " ".join(STREET_PREFIXES.get(word.casefold(), word) for word in value.split()).strip(" ,")
+
+
+def unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", value.strip(" ,"))
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
+            seen.add(key)
+            result.append(cleaned)
+    return result
 
 
 def address_variants(text: str) -> list[str]:
-    cleaned = re.sub(r"\s+", " ", text.strip(" ,"))
-    variants = [cleaned]
+    cleaned = normalize_address(text)
+    variants = [cleaned, f"{cleaned}, Україна"]
+    lower = cleaned.casefold()
+    city = next((name for name in CITY_ALIASES if re.search(rf"\b{re.escape(name)}\b", lower)), None)
+    house_match = re.search(r"\b(\d+[а-яa-z]?(?:[/\-]\d+[а-яa-z]?)?)\b", cleaned, flags=re.I)
+    house = house_match.group(1) if house_match else None
 
-    lower = cleaned.lower()
-    city = next((name for name in CITY_ALIASES if lower.startswith(name)), None)
     if city:
-        tail = cleaned[len(city):].strip(" ,")
         city_full = CITY_ALIASES[city]
-        if tail:
-            variants.append(f"{tail}, {city_full}")
-            if not any(word in tail.lower() for word in STREET_WORDS):
-                variants.append(f"вулиця {tail}, {city_full}")
-        variants.append(f"{cleaned}, Житомирська область, Україна")
-    else:
-        variants.append(f"{cleaned}, Україна")
+        remainder = re.sub(rf"\b{re.escape(city)}\b", "", cleaned, flags=re.I).strip(" ,")
+        variants.extend([
+            f"{remainder}, {city_full}",
+            f"{city_full}, {remainder}",
+            f"{cleaned}, Житомирська область, Україна",
+        ])
+        if remainder and not re.search(r"\b(вулиця|проспект|провулок|бульвар|шосе|площа|майдан|набережна)\b", remainder, flags=re.I):
+            variants.extend([f"вулиця {remainder}, {city_full}", f"{city_full}, вулиця {remainder}"])
+        if house:
+            street_only = re.sub(rf"\b{re.escape(house)}\b", "", remainder, flags=re.I).strip(" ,")
+            variants.extend([
+                f"{street_only}, {house}, {city_full}",
+                f"{city_full}, {street_only}, {house}",
+                f"{house}, {street_only}, {city_full}",
+            ])
+            if street_only and not re.search(r"\b(вулиця|проспект|провулок|бульвар|шосе|площа|майдан|набережна)\b", street_only, flags=re.I):
+                variants.extend([f"вулиця {street_only}, {house}, {city_full}", f"{city_full}, вулиця {street_only}, {house}"])
+    elif house:
+        street_only = re.sub(rf"\b{re.escape(house)}\b", "", cleaned, flags=re.I).strip(" ,")
+        variants.extend([f"{street_only}, {house}, Україна", f"{house}, {street_only}, Україна"])
 
-    match = re.match(r"^(.+?)\s+(\d+[а-яА-Яa-zA-Z]?)$", cleaned)
-    if match:
-        variants.append(f"{match.group(1)}, {match.group(2)}, Україна")
+    variants.append(re.sub(r"\s+(?=\d+[а-яa-z]?(?:[/\-]\d+)?\b)", ", ", cleaned, flags=re.I))
+    return unique(variants)
 
-    result: list[str] = []
-    for item in variants:
-        if item and item.casefold() not in {value.casefold() for value in result}:
-            result.append(item)
-    return result
+
+async def nominatim_search(client: httpx.AsyncClient, query: str):
+    response = await asyncio.wait_for(
+        client.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "ua", "addressdetails": 1, "dedupe": 1},
+        ),
+        timeout=9.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def photon_search(client: httpx.AsyncClient, query: str):
+    response = await asyncio.wait_for(
+        client.get("https://photon.komoot.io/api/", params={"q": query, "limit": 1, "lang": "uk"}),
+        timeout=9.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    features = data.get("features") or []
+    if not features:
+        return None
+    feature = features[0]
+    lon, lat = feature["geometry"]["coordinates"]
+    props = feature.get("properties") or {}
+    label = ", ".join(str(props.get(key)) for key in ("name", "street", "housenumber", "city", "state", "country") if props.get(key))
+    return float(lat), float(lon), label or query
 
 
 async def resolve_point(text: str):
@@ -60,38 +119,26 @@ async def resolve_point(text: str):
         if coordinates:
             return coordinates[0], coordinates[1], "Точка з картографічного посилання"
 
-    headers = {
-        "User-Agent": base.settings().nominatim_user_agent,
-        "Accept-Language": "uk,en;q=0.7",
-    }
-    timeout = httpx.Timeout(8.0, connect=5.0)
+    headers = {"User-Agent": base.settings().nominatim_user_agent, "Accept-Language": "uk,en;q=0.7"}
+    variants = address_variants(text)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-            for query in address_variants(text):
-                params = {
-                    "q": query,
-                    "format": "jsonv2",
-                    "limit": 1,
-                    "countrycodes": "ua",
-                    "addressdetails": 1,
-                    "dedupe": 1,
-                }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(9.0, connect=5.0), headers=headers, follow_redirects=True) as client:
+            for query in variants:
                 try:
-                    response = await asyncio.wait_for(
-                        client.get("https://nominatim.openstreetmap.org/search", params=params),
-                        timeout=9.0,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
+                    data = await nominatim_search(client, query)
                 except (asyncio.TimeoutError, httpx.HTTPError, ValueError):
                     continue
-
                 if data:
-                    latitude = float(data[0]["lat"])
-                    longitude = float(data[0]["lon"])
-                    label = str(data[0].get("display_name") or query)[:160]
-                    return latitude, longitude, label
+                    return float(data[0]["lat"]), float(data[0]["lon"]), str(data[0].get("display_name") or query)[:160]
+
+            for query in variants[:5]:
+                try:
+                    result = await photon_search(client, query)
+                except (asyncio.TimeoutError, httpx.HTTPError, ValueError, KeyError, TypeError):
+                    continue
+                if result:
+                    return result[0], result[1], result[2][:160]
     except Exception:
         base.logger.exception("Geocoding failed")
 
@@ -104,15 +151,13 @@ async def location(update, context):
 
     message = update.effective_message
     if message.location:
-        lat, lon, label = (
-            message.location.latitude,
-            message.location.longitude,
-            "Надіслана геолокація",
-        )
+        lat, lon, label = message.location.latitude, message.location.longitude, "Надіслана геолокація"
     elif message.text:
         result = await resolve_point(message.text)
         if not result:
-            await message.reply_text("Уточніть адресу")
+            await message.reply_text(
+                "Точку не знайдено. Спробуйте інший порядок слів, координати, посилання або виберіть точку на карті."
+            )
             return base.WAIT_LOCATION
         lat, lon, label = result
     else:
@@ -120,8 +165,7 @@ async def location(update, context):
 
     context.user_data["point"] = {"lat": lat, "lon": lon, "label": label}
     await message.reply_text(
-        f"БС: <code>{lat:.7f}, {lon:.7f}</code>\n"
-        "Введіть азимут, наприклад <code>90</code>, або азимут і радіус: <code>90 15</code>.",
+        f"БС: <code>{lat:.7f}, {lon:.7f}</code>\nВведіть азимут, наприклад <code>90</code>, або азимут і радіус: <code>90 15</code>.",
         parse_mode=ParseMode.HTML,
     )
     return base.WAIT_AZIMUTH
