@@ -29,7 +29,6 @@ base.deny = controlled_deny
 
 
 async def first_start_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Перший /start: контакт -> заявка -> очікування погодження."""
     message = update.effective_message
     user = update.effective_user
     if message is None or user is None:
@@ -38,7 +37,6 @@ async def first_start_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_control.record_user(user)
 
     if user_control.has_access(user.id):
-        # Схваленого користувача пропускаємо до звичайного сценарію /start.
         return
 
     row = user_control.get_user(user.id)
@@ -58,7 +56,6 @@ async def first_start_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=user_control.contact_keyboard(),
         )
 
-    # Не дозволяємо ConversationHandler паралельно запускати побудову сектора.
     raise ApplicationHandlerStop
 
 
@@ -139,6 +136,63 @@ async def access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         pass
 
 
+async def manage_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.from_user is None:
+        return
+    await query.answer()
+
+    if not user_control.is_admin(query.from_user.id):
+        await query.answer("Недостатньо прав", show_alert=True)
+        return
+
+    try:
+        _, action, user_id_raw = (query.data or "").split(":", 2)
+        user_id = int(user_id_raw)
+    except (ValueError, TypeError):
+        await query.edit_message_text("Некоректна команда керування користувачем.")
+        return
+
+    if user_control.is_admin(user_id) or user_id in user_control.STATIC_ALLOWED_IDS:
+        await query.answer("Цей доступ задано в налаштуваннях Render і тут не скасовується.", show_alert=True)
+        return
+
+    if action == "revoke":
+        user_control.set_status(user_id, "blocked")
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")
+            ]])
+        )
+        await query.answer("Доступ скасовано", show_alert=True)
+        try:
+            await context.bot.send_message(
+                user_id,
+                "⛔ Адміністратор скасував ваш доступ до бота.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        except Exception:
+            pass
+        return
+
+    if action == "restore":
+        user_control.set_status(user_id, "approved")
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⛔ Скасувати доступ", callback_data=f"manage:revoke:{user_id}")
+            ]])
+        )
+        await query.answer("Доступ відновлено", show_alert=True)
+        try:
+            await context.bot.send_message(
+                user_id,
+                "✅ Адміністратор відновив ваш доступ до бота.",
+                reply_markup=ui_buttons.keyboard_for_user(user_id),
+            )
+        except Exception:
+            pass
+
+
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None or not user_control.is_admin(user.id):
@@ -151,25 +205,46 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text("Користувачів ще немає.")
         return
 
+    await update.effective_message.reply_text(
+        "<b>Користувачі бота</b>\nНатисніть кнопку під користувачем, щоб змінити його доступ.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=ui_buttons.admin_keyboard(),
+    )
+
     icons = {"approved": "✅", "pending": "⏳", "blocked": "⛔"}
-    lines = ["<b>Користувачі бота</b>"]
     for row in rows:
+        user_id = int(row["user_id"])
         name = " ".join(filter(None, [row["first_name"], row["last_name"]])) or "Без імені"
         username = f"@{row['username']}" if row["username"] else "без username"
         phone = row["phone_number"] or "контакт не надано"
-        admin_mark = " · 👑 адміністратор" if user_control.is_admin(row["user_id"]) else ""
-        lines.append(
-            f"{icons.get(row['status'], '•')} <b>{name}</b> · {username}{admin_mark}\n"
+        admin_mark = " · 👑 адміністратор" if user_control.is_admin(user_id) else ""
+        fixed_mark = " · 🔒 постійний доступ" if user_id in user_control.STATIC_ALLOWED_IDS else ""
+        text = (
+            f"{icons.get(row['status'], '•')} <b>{name}</b> · {username}{admin_mark}{fixed_mark}\n"
             f"Телефон: <code>{phone}</code>\n"
-            f"ID: <code>{row['user_id']}</code> · дій: {row['usage_count']}"
+            f"ID: <code>{user_id}</code> · дій: {row['usage_count']}"
         )
 
-    text = "\n\n".join(lines)
-    for start in range(0, len(text), 3900):
+        keyboard = None
+        if not user_control.is_admin(user_id) and user_id not in user_control.STATIC_ALLOWED_IDS:
+            if row["status"] == "approved":
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⛔ Скасувати доступ", callback_data=f"manage:revoke:{user_id}")
+                ]])
+            elif row["status"] == "blocked":
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")
+                ]])
+            elif row["status"] == "pending":
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Дозволити", callback_data=f"access:approved:{user_id}"),
+                    InlineKeyboardButton("⛔ Відмовити", callback_data=f"access:blocked:{user_id}"),
+                ]])
+
         await update.effective_message.reply_text(
-            text[start:start + 3900],
+            text,
             parse_mode=ParseMode.HTML,
-            reply_markup=ui_buttons.admin_keyboard(),
+            reply_markup=keyboard,
         )
 
 
@@ -231,6 +306,7 @@ def controlled_build_bot():
     application.add_handler(CommandHandler("start", first_start_gate), group=-3)
     application.add_handler(MessageHandler(filters.CONTACT, contact_request), group=-2)
     application.add_handler(CallbackQueryHandler(access_callback, pattern=r"^access:"), group=-1)
+    application.add_handler(CallbackQueryHandler(manage_user_callback, pattern=r"^manage:"), group=-1)
     application.add_handler(CommandHandler("users", users_command), group=-1)
     application.add_handler(MessageHandler(filters.Regex(f"^{ui_buttons.BTN_USERS}$"), users_command), group=-1)
     application.add_handler(CommandHandler("approve", approve_command), group=-1)
