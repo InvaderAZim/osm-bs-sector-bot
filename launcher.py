@@ -4,10 +4,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
-import app as base
+import server as preview_server
 import user_control
 
-
+base = preview_server.base
 user_control.init_db()
 
 
@@ -131,4 +131,4 @@ def controlled_build_bot():
 
 
 base.build_bot = controlled_build_bot
-api = base.api
+api = preview_server.api
