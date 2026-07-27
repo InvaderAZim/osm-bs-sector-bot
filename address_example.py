@@ -27,5 +27,6 @@ async def manual_location_prompt(update, context):
 
 ui_buttons.manual_location_prompt = manual_location_prompt
 
-# Підключає кнопку вибору довільної точки на інтерактивній карті.
+# Підключає вибір довільної точки на карті та стабільний перехід до азимуту.
 import location_picker  # noqa: E402,F401
+import flow_state_fix  # noqa: E402,F401
