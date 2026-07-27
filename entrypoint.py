@@ -1,5 +1,6 @@
 import launcher
 import address_search_v2  # applies robust address-search overrides before startup
 import map_picker_v2  # enables choosing any point directly on the map
+import cancel_everywhere  # keeps Cancel visible and returns to the previous menu
 
 api = launcher.api
