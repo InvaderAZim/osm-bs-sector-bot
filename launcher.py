@@ -7,6 +7,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, Mes
 import server as preview_server
 import ui_buttons
 import address_example
+import geocoding_fix
 import user_control
 
 base = preview_server.base
