@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+from urllib.parse import unquote
+
+from fastapi.responses import HTMLResponse
+from itsdangerous import BadSignature, URLSafeSerializer
+
+import launcher as bot
+
+
+@bot.api.middleware("http")
+async def sector_map_middleware(request, call_next):
+    path = request.url.path
+    prefix = "/map/"
+    if not path.startswith(prefix):
+        return await call_next(request)
+
+    token = unquote(path[len(prefix):])
+    try:
+        data = URLSafeSerializer(bot.settings().secret, salt="sector-v2").loads(token)
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        azimuth = float(data["az"])
+        radius_km = float(data["radius"])
+    except (BadSignature, KeyError, TypeError, ValueError):
+        return HTMLResponse("Недійсне або застаріле посилання", status_code=400)
+
+    cfg = json.dumps(
+        {
+            "lat": lat,
+            "lon": lon,
+            "az": azimuth,
+            "radius": radius_km * 1000,
+            "radiusKm": radius_km,
+        },
+        ensure_ascii=False,
+    )
+
+    html = f"""<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>Сектор БС — OpenStreetMap</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html,body,#map{{height:100%;margin:0}}
+    body{{font-family:Arial,sans-serif;background:#111}}
+    .info{{position:fixed;z-index:1000;top:12px;left:12px;right:12px;max-width:390px;padding:12px 14px;border-radius:12px;background:rgba(17,24,39,.9);color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.3)}}
+    .info div{{margin-top:5px}}
+    .sector-canvas{{position:absolute;pointer-events:none}}
+    .bs-label{{background:#b91c1c;color:#fff;border:0;font-weight:700}}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="info">
+  <strong>Сектор базової станції</strong>
+  <div>{lat:.7f}, {lon:.7f}</div>
+  <div>Азимут: {azimuth:g}° · сектор 120° · радіус {radius_km:g} км</div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const cfg={cfg};
+const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;
+function dest(lat,lon,bearing,distance){{
+  const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R;
+  const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t));
+  const l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+  return L.latLng(deg(p2),((deg(l2)+540)%360)-180);
+}}
+const map=L.map('map').setView([cfg.lat,cfg.lon],11);
+L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}}).addTo(map);
+map.createPane('sectorPane');
+map.getPane('sectorPane').style.zIndex='350';
+map.getPane('sectorPane').style.pointerEvents='none';
+const center=L.latLng(cfg.lat,cfg.lon);
+const left=dest(cfg.lat,cfg.lon,cfg.az-60,cfg.radius);
+const right=dest(cfg.lat,cfg.lon,cfg.az+60,cfg.radius);
+const arc=[];
+for(let o=-60;o<=60;o+=2) arc.push(dest(cfg.lat,cfg.lon,cfg.az+o,cfg.radius));
+L.circleMarker(center,{{radius:7,color:'#7f1d1d',weight:3,fillColor:'#ef4444',fillOpacity:1}}).addTo(map).bindTooltip('БС',{{permanent:true,direction:'top',className:'bs-label'}});
+const Sector=L.Layer.extend({{
+  onAdd(m){{this.m=m;this.c=L.DomUtil.create('canvas','sector-canvas');m.getPane('sectorPane').appendChild(this.c);m.on('move zoom resize viewreset',this.draw,this);this.draw()}},
+  onRemove(m){{m.off('move zoom resize viewreset',this.draw,this);L.DomUtil.remove(this.c)}},
+  draw(){{
+    const s=this.m.getSize(),tl=this.m.containerPointToLayerPoint([0,0]);
+    L.DomUtil.setPosition(this.c,tl);
+    const q=Math.max(1,window.devicePixelRatio||1);
+    this.c.style.width=s.x+'px';this.c.style.height=s.y+'px';this.c.width=s.x*q;this.c.height=s.y*q;
+    const x=this.c.getContext('2d');x.setTransform(q,0,0,q,0,0);x.clearRect(0,0,s.x,s.y);
+    const cp=this.m.latLngToContainerPoint(center),lp=this.m.latLngToContainerPoint(left),rp=this.m.latLngToContainerPoint(right),ap=arc.map(p=>this.m.latLngToContainerPoint(p));
+    const azp=this.m.latLngToContainerPoint(dest(cfg.lat,cfg.lon,cfg.az,cfg.radius));
+    const radius=Math.hypot(azp.x-cp.x,azp.y-cp.y);
+    x.save();x.beginPath();x.moveTo(cp.x,cp.y);ap.forEach(p=>x.lineTo(p.x,p.y));x.closePath();x.clip();
+    const g=x.createRadialGradient(cp.x,cp.y,0,cp.x,cp.y,radius);
+    g.addColorStop(0,'rgba(220,38,38,.44)');g.addColorStop(.35,'rgba(220,38,38,.32)');g.addColorStop(.7,'rgba(220,38,38,.16)');g.addColorStop(1,'rgba(220,38,38,0)');
+    x.fillStyle=g;x.fillRect(0,0,s.x,s.y);x.restore();
+    x.strokeStyle='rgba(185,28,28,.95)';x.lineWidth=3;x.beginPath();x.moveTo(cp.x,cp.y);x.lineTo(lp.x,lp.y);x.moveTo(cp.x,cp.y);x.lineTo(rp.x,rp.y);x.stroke();
+    x.strokeStyle='rgba(220,38,38,.72)';x.lineWidth=2;x.beginPath();ap.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.stroke();
+  }}
+}});
+new Sector().addTo(map);
+map.fitBounds(L.latLngBounds([center,left,right,...arc]).pad(.12));
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)
