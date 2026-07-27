@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
@@ -77,7 +79,17 @@ def keyboard_for_user(user_id: int | None = None):
     return main_keyboard()
 
 
+def is_duplicate(context: ContextTypes.DEFAULT_TYPE, action: str, seconds: float = 3.0) -> bool:
+    now = time.monotonic()
+    key = f"last_action:{action}"
+    previous = float(context.chat_data.get(key, 0.0))
+    context.chat_data[key] = now
+    return now - previous < seconds
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_duplicate(context, "start", 4.0):
+        return base.WAIT_LOCATION
     if await base.deny(update, context):
         return ConversationHandler.END
     context.user_data.clear()
@@ -89,19 +101,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def manual_location_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_duplicate(context, "manual-location", 1.5):
+        return base.WAIT_LOCATION
     await update.effective_message.reply_text(
         "Введіть адресу, координати або посилання на карту.",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_BACK), KeyboardButton(BTN_CANCEL)]],
             resize_keyboard=True,
             is_persistent=True,
-            input_field_placeholder="Наприклад: 50.9500, 28.6500",
+            input_field_placeholder="Наприклад: Коростень, Пушкінська, 8",
         ),
     )
     return base.WAIT_LOCATION
 
 
 async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.effective_message.text or "").strip() if update.effective_message else ""
+    if text and is_duplicate(context, f"location:{text.lower()}", 2.0):
+        return base.WAIT_LOCATION
+
+    if text:
+        await update.effective_message.reply_text("🔎 Шукаю точку на карті…")
+
     result = await base.location(update, context)
     if result == base.WAIT_AZIMUTH:
         await update.effective_message.reply_text(
@@ -112,6 +133,8 @@ async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def custom_azimuth_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_duplicate(context, "custom-azimuth", 1.5):
+        return base.WAIT_AZIMUTH
     await update.effective_message.reply_text(
         "Введіть азимут від 0° до 359.99°. Радіус можна вказати другим числом: 125 8.",
         reply_markup=ReplyKeyboardMarkup(
@@ -140,12 +163,16 @@ def normalize_azimuth_button(text: str) -> str:
 
 async def azimuth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_message and update.effective_message.text:
-        update.effective_message.text = normalize_azimuth_button(update.effective_message.text)
-    result = await base.azimuth(update, context)
-    return result
+        normalized = normalize_azimuth_button(update.effective_message.text)
+        if is_duplicate(context, f"azimuth:{normalized}", 2.0):
+            return base.WAIT_AZIMUTH
+        update.effective_message.text = normalized
+    return await base.azimuth(update, context)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_duplicate(context, "cancel", 1.5):
+        return ConversationHandler.END
     context.user_data.clear()
     user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
@@ -156,6 +183,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_duplicate(context, "help", 2.0):
+        return
     user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
         "<b>Як користуватися ботом</b>\n"
