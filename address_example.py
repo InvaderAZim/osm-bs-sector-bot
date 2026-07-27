@@ -27,5 +27,6 @@ async def manual_location_prompt(update, context):
 
 ui_buttons.manual_location_prompt = manual_location_prompt
 
-# Новий спрощений сценарій завантажується останнім і повністю замінює старе меню.
+# Спрощений сценарій та виправлення кнопки «Новий сектор» завантажуються останніми.
 import simple_flow  # noqa: E402,F401
+import new_sector_fix  # noqa: E402,F401
