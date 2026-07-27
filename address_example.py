@@ -27,6 +27,5 @@ async def manual_location_prompt(update, context):
 
 ui_buttons.manual_location_prompt = manual_location_prompt
 
-# Підключає вибір довільної точки на карті та стабільний перехід до азимуту.
-import location_picker  # noqa: E402,F401
-import flow_state_fix  # noqa: E402,F401
+# Новий спрощений сценарій завантажується останнім і повністю замінює старе меню.
+import simple_flow  # noqa: E402,F401
