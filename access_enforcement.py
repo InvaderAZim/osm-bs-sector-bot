@@ -17,10 +17,13 @@ CHECK_SCRIPT = r'''
 (() => {
   const tg = window.Telegram?.WebApp;
   const originalFetch = window.fetch.bind(window);
-  let invalidAttempts = 0;
+  let lastInitData = '';
+  let consecutiveAuthFailures = 0;
 
   function currentInitData() {
-    return window.Telegram?.WebApp?.initData || '';
+    const fresh = window.Telegram?.WebApp?.initData || '';
+    if (fresh) lastInitData = fresh;
+    return fresh || lastInitData;
   }
 
   function hideBlocked() {
@@ -40,30 +43,41 @@ CHECK_SCRIPT = r'''
     if (text) text.textContent = message || 'Зверніться до адміністратора бота.';
   }
 
-  window.fetch = function(input, options = {}) {
-    const url = typeof input === 'string' ? input : input?.url || '';
-    if (url.startsWith('/api/')) {
-      const headers = new Headers(options.headers || {});
-      headers.set('X-Telegram-Init-Data', currentInitData());
-      options = {...options, headers};
+  async function waitForInitData(timeoutMs = 4000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const value = currentInitData();
+      if (value) return value;
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
-    return originalFetch(input, options).then(response => {
-      if (response.status === 403) {
-        showBlocked('Ваш обліковий запис більше не має доступу до DUGA.');
+    return currentInitData();
+  }
+
+  window.fetch = async function(input, options = {}) {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (!url.startsWith('/api/')) {
+      return originalFetch(input, options);
+    }
+
+    const initData = await waitForInitData();
+    const headers = new Headers(options.headers || {});
+    if (initData) headers.set('X-Telegram-Init-Data', initData);
+    const response = await originalFetch(input, {...options, headers});
+
+    if (response.status === 403) {
+      const copy = response.clone();
+      const data = await copy.json().catch(() => ({}));
+      if (data?.error === 'access_denied' || data?.allowed === false) {
+        showBlocked(data.message || 'Ваш обліковий запис більше не має доступу до DUGA.');
       }
-      return response;
-    });
+    }
+
+    return response;
   };
 
   async function verifyAccess() {
-    const initData = currentInitData();
-    if (!initData) {
-      invalidAttempts += 1;
-      if (invalidAttempts >= 5) {
-        showBlocked('Не вдалося отримати дані Telegram. Закрийте вікно та відкрийте DUGA кнопкою в боті.');
-      }
-      return;
-    }
+    const initData = await waitForInitData();
+    if (!initData) return;
 
     try {
       const response = await originalFetch('/api/access', {
@@ -73,31 +87,27 @@ CHECK_SCRIPT = r'''
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && data.allowed) {
-        invalidAttempts = 0;
+        consecutiveAuthFailures = 0;
         hideBlocked();
         return;
       }
 
-      if (response.status === 401) {
-        invalidAttempts += 1;
-        if (invalidAttempts >= 5) {
-          showBlocked(data.message || 'Не вдалося перевірити дані Telegram. Повторно відкрийте DUGA кнопкою в боті.');
-        }
+      if (response.status === 403) {
+        showBlocked(data.message || 'Ваш обліковий запис більше не має доступу до DUGA.');
         return;
       }
 
-      showBlocked(data.message || 'Ваш обліковий запис більше не має доступу до DUGA.');
+      // Temporary Telegram/session errors must not eject an approved user.
+      consecutiveAuthFailures += 1;
     } catch (_) {
-      invalidAttempts += 1;
-      if (invalidAttempts >= 5) {
-        showBlocked('Тимчасово не вдалося перевірити доступ. Закрийте та повторно відкрийте DUGA.');
-      }
+      consecutiveAuthFailures += 1;
     }
   }
 
   tg?.ready();
-  setTimeout(verifyAccess, 300);
-  setInterval(verifyAccess, 15000);
+  tg?.expand();
+  setTimeout(verifyAccess, 500);
+  setInterval(verifyAccess, 30000);
 })();
 </script>
 '''
@@ -162,7 +172,7 @@ async def enforce_mini_app_access(request: Request, call_next):
         allowed, _, message, status_code = _access_result(request)
         if not allowed:
             return JSONResponse(
-                {"error": "access_denied", "message": message},
+                {"error": "access_denied" if status_code == 403 else "telegram_auth_unavailable", "message": message},
                 status_code=status_code,
                 headers={"Cache-Control": "no-store"},
             )
