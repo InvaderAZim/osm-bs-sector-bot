@@ -18,7 +18,6 @@ CHECK_SCRIPT = r'''
   const tg = window.Telegram?.WebApp;
   const originalFetch = window.fetch.bind(window);
   let lastInitData = '';
-  let consecutiveAuthFailures = 0;
 
   function currentInitData() {
     const fresh = window.Telegram?.WebApp?.initData || '';
@@ -43,40 +42,8 @@ CHECK_SCRIPT = r'''
     if (text) text.textContent = message || 'Зверніться до адміністратора бота.';
   }
 
-  async function waitForInitData(timeoutMs = 4000) {
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      const value = currentInitData();
-      if (value) return value;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    return currentInitData();
-  }
-
-  window.fetch = async function(input, options = {}) {
-    const url = typeof input === 'string' ? input : input?.url || '';
-    if (!url.startsWith('/api/')) {
-      return originalFetch(input, options);
-    }
-
-    const initData = await waitForInitData();
-    const headers = new Headers(options.headers || {});
-    if (initData) headers.set('X-Telegram-Init-Data', initData);
-    const response = await originalFetch(input, {...options, headers});
-
-    if (response.status === 403) {
-      const copy = response.clone();
-      const data = await copy.json().catch(() => ({}));
-      if (data?.error === 'access_denied' || data?.allowed === false) {
-        showBlocked(data.message || 'Ваш обліковий запис більше не має доступу до DUGA.');
-      }
-    }
-
-    return response;
-  };
-
   async function verifyAccess() {
-    const initData = await waitForInitData();
+    const initData = currentInitData();
     if (!initData) return;
 
     try {
@@ -87,27 +54,22 @@ CHECK_SCRIPT = r'''
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && data.allowed) {
-        consecutiveAuthFailures = 0;
         hideBlocked();
         return;
       }
 
       if (response.status === 403) {
         showBlocked(data.message || 'Ваш обліковий запис більше не має доступу до DUGA.');
-        return;
       }
-
-      // Temporary Telegram/session errors must not eject an approved user.
-      consecutiveAuthFailures += 1;
     } catch (_) {
-      consecutiveAuthFailures += 1;
+      // Network or Telegram session errors must not close or block the Mini App.
     }
   }
 
   tg?.ready();
   tg?.expand();
-  setTimeout(verifyAccess, 500);
-  setInterval(verifyAccess, 30000);
+  setTimeout(verifyAccess, 800);
+  setInterval(verifyAccess, 45000);
 })();
 </script>
 '''
@@ -139,7 +101,7 @@ def _access_result(request: Request) -> tuple[bool, int | None, str, int]:
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user = _telegram_user(init_data)
     if not user:
-        return False, None, "Не вдалося перевірити дані Telegram. Повторно відкрийте DUGA кнопкою в боті.", 401
+        return False, None, "Не вдалося перевірити дані Telegram.", 401
 
     user_id = int(user["id"])
     if bot.is_admin(user_id):
@@ -167,6 +129,11 @@ async def enforce_mini_app_access(request: Request, call_next):
             status_code=status_code,
             headers={"Cache-Control": "no-store"},
         )
+
+    # Geocoding is intentionally left outside the auth middleware so the search
+    # request remains as stable as it was before access enforcement was added.
+    if path == "/api/geocode":
+        return await call_next(request)
 
     if path.startswith("/api/"):
         allowed, _, message, status_code = _access_result(request)
