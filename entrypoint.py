@@ -6,6 +6,7 @@ import cancel_everywhere  # keeps Cancel visible and returns to the previous men
 import map_route_fix  # serves the interactive sector map without template errors
 import radius_choice_v2  # asks for 1, 3, 5 or 10 km before visualization
 import mini_app  # full Telegram Mini App interface
+import broadcast_messages  # lets administrators send messages to approved users
 import webhook_mode  # uses Telegram webhooks instead of unstable long polling
 
 api = launcher.api
