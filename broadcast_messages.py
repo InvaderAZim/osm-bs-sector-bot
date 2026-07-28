@@ -44,7 +44,7 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["awaiting_broadcast"] = True
     await message.reply_text(
-        "Введіть повідомлення, яке бот надішле всім користувачам із дозволеним доступом.",
+        "Введіть повідомлення, яке бот надішле всім зареєстрованим користувачам незалежно від їхнього статусу.",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_CANCEL_BROADCAST)]],
             resize_keyboard=True,
@@ -86,16 +86,13 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     with bot.db() as connection:
         rows = connection.execute(
-            "SELECT user_id FROM users WHERE status=? ORDER BY user_id",
-            ("approved",),
+            "SELECT user_id FROM users ORDER BY user_id"
         ).fetchall()
 
     delivered = 0
     failed = 0
     for row in rows:
         target_id = int(row["user_id"])
-        if target_id in bot.settings().admin_ids:
-            continue
         try:
             await context.bot.send_message(
                 chat_id=target_id,
