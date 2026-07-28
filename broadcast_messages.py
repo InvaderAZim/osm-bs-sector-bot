@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
-from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationHandlerStop,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import launcher as bot
 
@@ -22,18 +29,10 @@ def main_keyboard_with_broadcast(user_id: int) -> ReplyKeyboardMarkup:
         return keyboard
 
     rows = [list(row) for row in keyboard.keyboard]
-    broadcast_row = [KeyboardButton(BTN_BROADCAST)]
-
-    # Insert the broadcast action before the restart button.
-    insert_at = max(0, len(rows) - 1)
     if not any(button.text == BTN_BROADCAST for row in rows for button in row):
-        rows.insert(insert_at, broadcast_row)
+        rows.insert(max(0, len(rows) - 1), [KeyboardButton(BTN_BROADCAST)])
 
-    return ReplyKeyboardMarkup(
-        rows,
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -44,13 +43,14 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["awaiting_broadcast"] = True
     await message.reply_text(
-        "Введіть повідомлення, яке бот надішле всім зареєстрованим користувачам незалежно від їхнього статусу.",
+        "Введіть текст повідомлення. Бот надішле його всім зареєстрованим користувачам незалежно від статусу.",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_CANCEL_BROADCAST)]],
             resize_keyboard=True,
             is_persistent=True,
         ),
     )
+    raise ApplicationHandlerStop
 
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -60,10 +60,8 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     context.user_data.pop("awaiting_broadcast", None)
-    await message.reply_text(
-        "Розсилку скасовано.",
-        reply_markup=bot.main_keyboard(user.id),
-    )
+    await message.reply_text("Розсилку скасовано.", reply_markup=bot.main_keyboard(user.id))
+    raise ApplicationHandlerStop
 
 
 async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -80,14 +78,12 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = (message.text or "").strip()
     if not text:
         await message.reply_text("Повідомлення не може бути порожнім.")
-        return
+        raise ApplicationHandlerStop
 
     context.user_data.pop("awaiting_broadcast", None)
 
     with bot.db() as connection:
-        rows = connection.execute(
-            "SELECT user_id FROM users ORDER BY user_id"
-        ).fetchall()
+        rows = connection.execute("SELECT user_id FROM users ORDER BY user_id").fetchall()
 
     delivered = 0
     failed = 0
@@ -108,22 +104,26 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"✅ Розсилку завершено.\nДоставлено: {delivered}\nНе доставлено: {failed}",
         reply_markup=bot.main_keyboard(user.id),
     )
+    raise ApplicationHandlerStop
 
 
 def build_bot_with_broadcast():
     app = _original_build_bot()
-    app.add_handler(CommandHandler("broadcast", start_broadcast), group=1)
+
+    # Negative groups run before the ConversationHandler, so the admin button
+    # cannot be swallowed as ordinary menu text.
+    app.add_handler(CommandHandler("broadcast", start_broadcast), group=-210)
     app.add_handler(
-        MessageHandler(filters.Regex(f"^{BTN_BROADCAST}$"), start_broadcast),
-        group=1,
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_BROADCAST)}$"), start_broadcast),
+        group=-210,
     )
     app.add_handler(
-        MessageHandler(filters.Regex(f"^{BTN_CANCEL_BROADCAST}$"), cancel_broadcast),
-        group=1,
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_CANCEL_BROADCAST)}$"), cancel_broadcast),
+        group=-210,
     )
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, send_broadcast),
-        group=2,
+        group=-200,
     )
     return app
 
