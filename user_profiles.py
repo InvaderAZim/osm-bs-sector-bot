@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+from datetime import datetime, timezone
 from html import escape
+from io import BytesIO, StringIO
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -23,6 +26,7 @@ def category_keyboard(counts: dict[str, int]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(f"⏳ Потребують дозволу · {counts['pending']}", callback_data="users:list:pending")],
         [InlineKeyboardButton(f"✅ Надано доступ · {counts['approved']}", callback_data="users:list:approved")],
         [InlineKeyboardButton(f"⛔ Заблоковані · {counts['blocked']}", callback_data="users:list:blocked")],
+        [InlineKeyboardButton("📋 Завантажити список користувачів", callback_data="users:export")],
     ])
 
 
@@ -66,6 +70,13 @@ def rows_for_category(category: str):
         ).fetchall()
 
 
+def all_user_rows():
+    with bot.db() as connection:
+        return connection.execute(
+            "SELECT * FROM users ORDER BY status, updated_at DESC, user_id DESC"
+        ).fetchall()
+
+
 def user_buttons(row, category: str) -> InlineKeyboardMarkup | None:
     user_id = int(row["user_id"])
     username = (row["username"] or "").strip().lstrip("@")
@@ -88,6 +99,47 @@ def user_buttons(row, category: str) -> InlineKeyboardMarkup | None:
             buttons.append([InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")])
 
     return InlineKeyboardMarkup(buttons) if buttons else None
+
+
+async def export_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.from_user or not bot.is_admin(query.from_user.id):
+        return
+
+    await query.answer("Формую список…")
+    rows = all_user_rows()
+
+    text_buffer = StringIO(newline="")
+    writer = csv.writer(text_buffer, delimiter=";")
+    writer.writerow(["Ім'я", "Username", "Телефон", "Telegram ID", "Статус", "Створено", "Оновлено"])
+
+    for row in rows:
+        full_name = " ".join(
+            part for part in [row["first_name"] or "", row["last_name"] or ""] if part
+        ).strip() or "Без імені"
+        username = (row["username"] or "").strip()
+        if username and not username.startswith("@"):
+            username = f"@{username}"
+        writer.writerow([
+            full_name,
+            username,
+            row["phone"] or "",
+            int(row["user_id"]),
+            STATUS_LABELS.get(row["status"], row["status"]),
+            str(row["created_at"] or ""),
+            str(row["updated_at"] or ""),
+        ])
+
+    payload = ("\ufeff" + text_buffer.getvalue()).encode("utf-8")
+    document = BytesIO(payload)
+    document.name = f"DUGA_users_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M')}.csv"
+
+    await query.message.reply_document(
+        document=document,
+        filename=document.name,
+        caption=f"📋 Список користувачів DUGA\nКількість: {len(rows)}",
+    )
+    raise ApplicationHandlerStop
 
 
 async def open_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -188,6 +240,7 @@ def build_bot_with_user_categories():
     application = _original_build_bot()
     application.add_handler(CallbackQueryHandler(show_category, pattern=r"^users:list:(pending|approved|blocked)$"), group=-170)
     application.add_handler(CallbackQueryHandler(show_categories_callback, pattern=r"^users:categories$"), group=-170)
+    application.add_handler(CallbackQueryHandler(export_users_callback, pattern=r"^users:export$"), group=-170)
     application.add_handler(CallbackQueryHandler(open_profile_callback, pattern=r"^profile:open:\d+$"), group=-170)
     return application
 
