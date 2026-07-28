@@ -39,7 +39,7 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
     message = update.effective_message
     if not user or not message or not bot.is_admin(user.id):
-        return
+        raise ApplicationHandlerStop
 
     context.user_data["awaiting_broadcast"] = True
     await message.reply_text(
@@ -50,6 +50,8 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             is_persistent=True,
         ),
     )
+
+    # The same button update must never reach the generic text handler below.
     raise ApplicationHandlerStop
 
 
@@ -57,7 +59,7 @@ async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     message = update.effective_message
     if not user or not message or not bot.is_admin(user.id):
-        return
+        raise ApplicationHandlerStop
 
     context.user_data.pop("awaiting_broadcast", None)
     await message.reply_text("Розсилку скасовано.", reply_markup=bot.main_keyboard(user.id))
@@ -76,6 +78,11 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = (message.text or "").strip()
+
+    # Defensive guard: menu button labels are control commands, never message content.
+    if text in {BTN_BROADCAST, BTN_CANCEL_BROADCAST}:
+        raise ApplicationHandlerStop
+
     if not text:
         await message.reply_text("Повідомлення не може бути порожнім.")
         raise ApplicationHandlerStop
@@ -110,8 +117,7 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_bot_with_broadcast():
     app = _original_build_bot()
 
-    # Negative groups run before the ConversationHandler, so the admin button
-    # cannot be swallowed as ordinary menu text.
+    # Run control handlers before the ConversationHandler and stop propagation.
     app.add_handler(CommandHandler("broadcast", start_broadcast), group=-210)
     app.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BROADCAST)}$"), start_broadcast),
