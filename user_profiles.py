@@ -71,9 +71,10 @@ def user_buttons(row, category: str) -> InlineKeyboardMarkup | None:
     username = (row["username"] or "").strip().lstrip("@")
     buttons = []
 
-    # Telegram accepts a normal t.me URL only when the user has a public username.
     if username:
         buttons.append([InlineKeyboardButton("👤 Відкрити профіль", url=f"https://t.me/{username}")])
+    else:
+        buttons.append([InlineKeyboardButton("👤 Відкрити профіль", callback_data=f"profile:open:{user_id}")])
 
     if user_id not in bot.settings().admin_ids:
         if category == "pending":
@@ -87,6 +88,37 @@ def user_buttons(row, category: str) -> InlineKeyboardMarkup | None:
             buttons.append([InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")])
 
     return InlineKeyboardMarkup(buttons) if buttons else None
+
+
+async def open_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.from_user or not bot.is_admin(query.from_user.id):
+        return
+
+    await query.answer()
+    user_id = int(query.data.rsplit(":", 1)[-1])
+    row = bot.user_row(user_id)
+    if not row:
+        await query.message.reply_text("Користувача не знайдено в базі.")
+        raise ApplicationHandlerStop
+
+    username = (row["username"] or "").strip().lstrip("@")
+    if username:
+        await query.message.reply_text(
+            f"👤 <a href=\"https://t.me/{escape(username)}\">Відкрити профіль користувача</a>",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    else:
+        full_name = " ".join(
+            part for part in [row["first_name"] or "", row["last_name"] or ""] if part
+        ).strip() or "Користувач"
+        await query.message.reply_text(
+            f"👤 <a href=\"tg://user?id={user_id}\">{escape(full_name)}</a>\n"
+            "Натисніть на ім’я, щоб відкрити профіль.",
+            parse_mode=ParseMode.HTML,
+        )
+    raise ApplicationHandlerStop
 
 
 async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -156,6 +188,7 @@ def build_bot_with_user_categories():
     application = _original_build_bot()
     application.add_handler(CallbackQueryHandler(show_category, pattern=r"^users:list:(pending|approved|blocked)$"), group=-170)
     application.add_handler(CallbackQueryHandler(show_categories_callback, pattern=r"^users:categories$"), group=-170)
+    application.add_handler(CallbackQueryHandler(open_profile_callback, pattern=r"^profile:open:\d+$"), group=-170)
     return application
 
 
