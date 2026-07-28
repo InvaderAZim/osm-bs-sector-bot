@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
+from pathlib import Path
 from typing import Any, Iterable
 
 import psycopg
@@ -32,7 +34,6 @@ class ConnectionAdapter:
 
     @staticmethod
     def _translate(sql: str) -> str:
-        # Existing bot code uses SQLite placeholders. Psycopg requires %s.
         return re.sub(r"\?", "%s", sql)
 
     def execute(self, sql: str, params: Iterable[Any] | None = None) -> ResultAdapter:
@@ -59,6 +60,56 @@ def postgres_db() -> ConnectionAdapter:
     return ConnectionAdapter(connection)
 
 
+def migrate_sqlite_users(connection: ConnectionAdapter) -> int:
+    sqlite_path = Path(bot.settings().db_path)
+    if not sqlite_path.exists() or sqlite_path.stat().st_size == 0:
+        return 0
+
+    try:
+        source = sqlite3.connect(sqlite_path)
+        source.row_factory = sqlite3.Row
+        rows = source.execute("SELECT * FROM users").fetchall()
+    except sqlite3.Error:
+        bot.log.exception("Could not read the previous SQLite user database")
+        return 0
+    finally:
+        try:
+            source.close()
+        except Exception:
+            pass
+
+    migrated = 0
+    for row in rows:
+        connection.execute(
+            """
+            INSERT INTO users(
+                user_id, username, first_name, last_name, phone,
+                status, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=EXCLUDED.username,
+                first_name=EXCLUDED.first_name,
+                last_name=EXCLUDED.last_name,
+                phone=COALESCE(EXCLUDED.phone, users.phone),
+                status=EXCLUDED.status,
+                updated_at=GREATEST(users.updated_at, EXCLUDED.updated_at)
+            """,
+            (
+                row["user_id"],
+                row["username"],
+                row["first_name"],
+                row["last_name"],
+                row["phone"],
+                row["status"],
+                row["created_at"],
+                row["updated_at"],
+            ),
+        )
+        migrated += 1
+    return migrated
+
+
 def postgres_init_db() -> None:
     if not DATABASE_URL:
         _sqlite_init_db()
@@ -80,12 +131,11 @@ def postgres_init_db() -> None:
             )
             """
         )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at DESC)"
-        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at DESC)")
+
+        migrated = migrate_sqlite_users(connection)
+
         for admin_id in bot.settings().admin_ids:
             connection.execute(
                 """
@@ -97,13 +147,14 @@ def postgres_init_db() -> None:
                 (admin_id,),
             )
 
-    bot.log.info("Persistent PostgreSQL user database is active")
+    bot.log.info(
+        "Persistent PostgreSQL user database is active; migrated SQLite users: %s",
+        migrated,
+    )
 
 
 _sqlite_db = bot.db
 _sqlite_init_db = bot.init_db
 
-# All existing user-management functions resolve these globals at runtime,
-# so replacing them here preserves the rest of the bot without a rewrite.
 bot.db = postgres_db
 bot.init_db = postgres_init_db
