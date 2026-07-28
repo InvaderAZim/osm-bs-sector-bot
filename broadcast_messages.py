@@ -43,15 +43,15 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["awaiting_broadcast"] = True
     await message.reply_text(
-        "Введіть текст повідомлення. Бот надішле його всім зареєстрованим користувачам незалежно від статусу.",
+        "✍️ Напишіть повідомлення у полі введення нижче та натисніть кнопку надсилання.\n\n"
+        "Бот надішле його всім зареєстрованим користувачам незалежно від статусу.",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_CANCEL_BROADCAST)]],
             resize_keyboard=True,
             is_persistent=True,
+            input_field_placeholder="Введіть текст повідомлення…",
         ),
     )
-
-    # The same button update must never reach the generic text handler below.
     raise ApplicationHandlerStop
 
 
@@ -78,11 +78,6 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = (message.text or "").strip()
-
-    # Defensive guard: menu button labels are control commands, never message content.
-    if text in {BTN_BROADCAST, BTN_CANCEL_BROADCAST}:
-        raise ApplicationHandlerStop
-
     if not text:
         await message.reply_text("Повідомлення не може бути порожнім.")
         raise ApplicationHandlerStop
@@ -117,7 +112,6 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_bot_with_broadcast():
     app = _original_build_bot()
 
-    # Run control handlers before the ConversationHandler and stop propagation.
     app.add_handler(CommandHandler("broadcast", start_broadcast), group=-210)
     app.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BROADCAST)}$"), start_broadcast),
@@ -127,10 +121,14 @@ def build_bot_with_broadcast():
         MessageHandler(filters.Regex(f"^{re.escape(BTN_CANCEL_BROADCAST)}$"), cancel_broadcast),
         group=-210,
     )
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, send_broadcast),
-        group=-200,
+
+    broadcast_text_filter = (
+        filters.TEXT
+        & ~filters.COMMAND
+        & ~filters.Regex(f"^{re.escape(BTN_BROADCAST)}$")
+        & ~filters.Regex(f"^{re.escape(BTN_CANCEL_BROADCAST)}$")
     )
+    app.add_handler(MessageHandler(broadcast_text_filter, send_broadcast), group=-200)
     return app
 
 
