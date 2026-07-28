@@ -4,7 +4,7 @@ from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, ContextTypes
 
 import launcher as bot
 
@@ -47,7 +47,7 @@ def get_counts() -> dict[str, int]:
         rows = connection.execute(
             """
             SELECT
-                SUM(CASE WHEN status='pending' AND phone IS NOT NULL AND phone<>'' THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
                 SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved,
                 SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) AS blocked
             FROM users
@@ -81,7 +81,7 @@ def rows_for_category(category: str):
             return connection.execute(
                 """
                 SELECT * FROM users
-                WHERE status='pending' AND phone IS NOT NULL AND phone<>''
+                WHERE status='pending'
                 ORDER BY updated_at DESC, user_id DESC
                 """
             ).fetchall()
@@ -142,7 +142,6 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     rows = rows_for_category(category)
-    counts = get_counts()
     await query.edit_message_text(
         f"<b>{labels[category]}</b>\nКількість: <b>{len(rows)}</b>",
         parse_mode=ParseMode.HTML,
@@ -153,7 +152,7 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not rows:
         await query.message.reply_text("У цій категорії користувачів немає.")
-        return
+        raise ApplicationHandlerStop
 
     for row in rows:
         user_id = int(row["user_id"])
@@ -178,6 +177,8 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             disable_web_page_preview=True,
         )
 
+    raise ApplicationHandlerStop
+
 
 async def show_categories_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -189,6 +190,7 @@ async def show_categories_callback(update: Update, context: ContextTypes.DEFAULT
         parse_mode=ParseMode.HTML,
         reply_markup=category_keyboard(get_counts()),
     )
+    raise ApplicationHandlerStop
 
 
 def build_bot_with_user_categories():
