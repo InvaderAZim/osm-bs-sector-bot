@@ -1,5 +1,6 @@
 import launcher
 import postgres_backend  # uses DATABASE_URL for persistent users, SQLite only as fallback
+import phone_enforcement  # requires every non-admin user to share their own phone number
 import address_search_v2  # applies robust address-search overrides before startup
 import map_picker_v2  # enables choosing any point directly on the map
 import cancel_everywhere  # keeps Cancel visible and returns to the previous menu
