@@ -18,27 +18,11 @@ STATUS_LABELS = {
 _original_build_bot = bot.build_bot
 
 
-def profile_url(row) -> str:
-    username = (row["username"] or "").strip().lstrip("@")
-    if username:
-        return f"https://t.me/{username}"
-    return f"tg://user?id={int(row['user_id'])}"
-
-
 def category_keyboard(counts: dict[str, int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            f"⏳ Потребують дозволу · {counts['pending']}",
-            callback_data="users:list:pending",
-        )],
-        [InlineKeyboardButton(
-            f"✅ Надано доступ · {counts['approved']}",
-            callback_data="users:list:approved",
-        )],
-        [InlineKeyboardButton(
-            f"⛔ Заблоковані · {counts['blocked']}",
-            callback_data="users:list:blocked",
-        )],
+        [InlineKeyboardButton(f"⏳ Потребують дозволу · {counts['pending']}", callback_data="users:list:pending")],
+        [InlineKeyboardButton(f"✅ Надано доступ · {counts['approved']}", callback_data="users:list:approved")],
+        [InlineKeyboardButton(f"⛔ Заблоковані · {counts['blocked']}", callback_data="users:list:blocked")],
     ])
 
 
@@ -66,47 +50,30 @@ async def users_menu_with_profiles(update: Update, context: ContextTypes.DEFAULT
     if not user or not message or not bot.is_admin(user.id):
         return bot.MENU
 
-    counts = get_counts()
     await message.reply_text(
         "👥 <b>Керування користувачами</b>\n\nОберіть категорію:",
         parse_mode=ParseMode.HTML,
-        reply_markup=category_keyboard(counts),
+        reply_markup=category_keyboard(get_counts()),
     )
     return bot.MENU
 
 
 def rows_for_category(category: str):
     with bot.db() as connection:
-        if category == "pending":
-            return connection.execute(
-                """
-                SELECT * FROM users
-                WHERE status='pending'
-                ORDER BY updated_at DESC, user_id DESC
-                """
-            ).fetchall()
-        if category == "approved":
-            return connection.execute(
-                """
-                SELECT * FROM users
-                WHERE status='approved'
-                ORDER BY updated_at DESC, user_id DESC
-                """
-            ).fetchall()
-        if category == "blocked":
-            return connection.execute(
-                """
-                SELECT * FROM users
-                WHERE status='blocked'
-                ORDER BY updated_at DESC, user_id DESC
-                """
-            ).fetchall()
-    return []
+        return connection.execute(
+            "SELECT * FROM users WHERE status=? ORDER BY updated_at DESC, user_id DESC",
+            (category,),
+        ).fetchall()
 
 
-def user_buttons(row, category: str) -> InlineKeyboardMarkup:
+def user_buttons(row, category: str) -> InlineKeyboardMarkup | None:
     user_id = int(row["user_id"])
-    buttons = [[InlineKeyboardButton("👤 Відкрити профіль", url=profile_url(row))]]
+    username = (row["username"] or "").strip().lstrip("@")
+    buttons = []
+
+    # Telegram accepts a normal t.me URL only when the user has a public username.
+    if username:
+        buttons.append([InlineKeyboardButton("👤 Відкрити профіль", url=f"https://t.me/{username}")])
 
     if user_id not in bot.settings().admin_ids:
         if category == "pending":
@@ -115,15 +82,11 @@ def user_buttons(row, category: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⛔ Заблокувати", callback_data=f"manage:revoke:{user_id}"),
             ])
         elif category == "approved":
-            buttons.append([
-                InlineKeyboardButton("⛔ Скасувати доступ", callback_data=f"manage:revoke:{user_id}")
-            ])
+            buttons.append([InlineKeyboardButton("⛔ Скасувати доступ", callback_data=f"manage:revoke:{user_id}")])
         elif category == "blocked":
-            buttons.append([
-                InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")
-            ])
+            buttons.append([InlineKeyboardButton("✅ Відновити доступ", callback_data=f"manage:restore:{user_id}")])
 
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(buttons) if buttons else None
 
 
 async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -145,9 +108,7 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await query.edit_message_text(
         f"<b>{labels[category]}</b>\nКількість: <b>{len(rows)}</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ До категорій", callback_data="users:categories")]
-        ]),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ До категорій", callback_data="users:categories")]]),
     )
 
     if not rows:
@@ -157,9 +118,7 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     for row in rows:
         user_id = int(row["user_id"])
         username = (row["username"] or "").strip()
-        full_name = " ".join(
-            part for part in [row["first_name"] or "", row["last_name"] or ""] if part
-        ).strip() or "Без імені"
+        full_name = " ".join(part for part in [row["first_name"] or "", row["last_name"] or ""] if part).strip() or "Без імені"
         role = "🛡 Адміністратор" if user_id in bot.settings().admin_ids else STATUS_LABELS.get(category, category)
         username_text = f"@{escape(username.lstrip('@'))}" if username else "не вказано"
 
@@ -195,14 +154,8 @@ async def show_categories_callback(update: Update, context: ContextTypes.DEFAULT
 
 def build_bot_with_user_categories():
     application = _original_build_bot()
-    application.add_handler(
-        CallbackQueryHandler(show_category, pattern=r"^users:list:(pending|approved|blocked)$"),
-        group=-170,
-    )
-    application.add_handler(
-        CallbackQueryHandler(show_categories_callback, pattern=r"^users:categories$"),
-        group=-170,
-    )
+    application.add_handler(CallbackQueryHandler(show_category, pattern=r"^users:list:(pending|approved|blocked)$"), group=-170)
+    application.add_handler(CallbackQueryHandler(show_categories_callback, pattern=r"^users:categories$"), group=-170)
     return application
 
 
