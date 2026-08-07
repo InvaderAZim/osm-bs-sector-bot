@@ -2,9 +2,23 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes
+from telegram.ext import (
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import launcher as bot
+
+
+_original_build_bot = bot.build_bot
+
+
+def _has_phone(user_id: int) -> bool:
+    row = bot.user_row(user_id)
+    return bool(row and (row["phone"] or "").strip())
 
 
 async def access_gate_with_required_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -16,9 +30,6 @@ async def access_gate_with_required_phone(update: Update, context: ContextTypes.
     bot.upsert_user(user)
     row = bot.user_row(user.id)
 
-    if bot.is_admin(user.id):
-        return True
-
     if row and row["status"] == "blocked":
         await message.reply_text(
             "⛔ Доступ скасовано адміністратором.",
@@ -26,14 +37,14 @@ async def access_gate_with_required_phone(update: Update, context: ContextTypes.
         )
         return False
 
-    if not row or not (row["phone"] or "").strip():
+    if not _has_phone(user.id):
         await message.reply_text(
-            "Для користування ботом надішліть власний номер телефону кнопкою нижче.",
+            "📱 Для користування ботом спочатку надішліть свій номер телефону кнопкою нижче.",
             reply_markup=bot.contact_keyboard(),
         )
         return False
 
-    if row["status"] == "approved":
+    if bot.is_admin(user.id) or (row and row["status"] == "approved"):
         return True
 
     await message.reply_text(
@@ -61,18 +72,13 @@ async def receive_contact_preserving_access(update: Update, context: ContextType
 
     bot.upsert_user(user, contact.phone_number)
 
-    if bot.is_admin(user.id):
-        bot.set_status(user.id, "approved")
-        await message.reply_text("✅ Номер телефону збережено.", reply_markup=ReplyKeyboardRemove())
-        return bot.MENU
-
-    if previous_status == "approved":
+    if bot.is_admin(user.id) or previous_status == "approved":
         bot.set_status(user.id, "approved")
         await message.reply_text(
-            "✅ Номер телефону збережено. Доступ залишається активним. Натисніть /start.",
-            reply_markup=ReplyKeyboardRemove(),
+            "✅ Номер телефону збережено. Більше запитувати його не будемо.",
+            reply_markup=bot.main_keyboard(user.id),
         )
-        return bot.ACCESS
+        return bot.MENU
 
     bot.set_status(user.id, "pending")
     keyboard = InlineKeyboardMarkup([[
@@ -100,5 +106,65 @@ async def receive_contact_preserving_access(update: Update, context: ContextType
     return bot.ACCESS
 
 
+async def force_phone_on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message:
+        return
+
+    bot.upsert_user(user)
+    row = bot.user_row(user.id)
+
+    if row and row["status"] == "blocked":
+        return
+
+    if _has_phone(user.id):
+        return
+
+    await message.reply_text(
+        "📱 Для користування ботом спочатку надішліть свій номер телефону кнопкою нижче.",
+        reply_markup=bot.contact_keyboard(),
+    )
+    raise ApplicationHandlerStop
+
+
+async def force_phone_on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if not query or not user:
+        return
+
+    bot.upsert_user(user)
+    row = bot.user_row(user.id)
+
+    if row and row["status"] == "blocked":
+        return
+
+    if _has_phone(user.id):
+        return
+
+    await query.answer("Спочатку надішліть номер телефону", show_alert=True)
+    if query.message:
+        await query.message.reply_text(
+            "📱 Для користування ботом спочатку надішліть свій номер телефону кнопкою нижче.",
+            reply_markup=bot.contact_keyboard(),
+        )
+    raise ApplicationHandlerStop
+
+
+async def global_contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await receive_contact_preserving_access(update, context)
+    raise ApplicationHandlerStop
+
+
+def build_bot_with_phone_requirement():
+    application = _original_build_bot()
+    application.add_handler(MessageHandler(filters.CONTACT, global_contact_handler), group=-1001)
+    application.add_handler(MessageHandler(~filters.CONTACT, force_phone_on_any_message), group=-1000)
+    application.add_handler(CallbackQueryHandler(force_phone_on_callback), group=-1000)
+    return application
+
+
 bot.access_gate = access_gate_with_required_phone
 bot.receive_contact = receive_contact_preserving_access
+bot.build_bot = build_bot_with_phone_requirement
