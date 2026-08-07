@@ -12,6 +12,7 @@ import access_enforcement  # immediately blocks revoked users in the Mini App an
 import broadcast_messages  # lets administrators send messages to all registered users
 import user_profiles  # shows all users with buttons that open their Telegram profiles
 import diagnostics  # /help, admin /status and global Telegram error handling
+import start_notice  # sends the free-hosting notice after /start
 import webhook_mode  # uses Telegram webhooks instead of unstable long polling
 
 api = launcher.api
