@@ -7,6 +7,7 @@ FULLSCREEN_CSS = r'''
     .fullscreen-btn{position:absolute;z-index:1000;right:10px;top:10px;border:1px solid rgba(255,255,255,.25);background:rgba(23,26,34,.92);color:#fff;border-radius:10px;padding:9px 11px;font-weight:800;box-shadow:0 2px 10px rgba(0,0,0,.35);backdrop-filter:blur(6px)}
     body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}
     body.duga-fullscreen #map{height:100vh;min-height:100vh}
+    body.duga-fullscreen .fullscreen-btn{position:fixed;top:auto;right:12px;bottom:max(16px,calc(env(safe-area-inset-bottom,0px) + 16px))}
 '''
 
 FULLSCREEN_BUTTON = r'''
