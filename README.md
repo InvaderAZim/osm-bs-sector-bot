@@ -1,69 +1,71 @@
-# Telegram-бот «Сектор БС на OpenStreetMap»
+# DUGA — Telegram Mini App для секторів БС
 
-Бот приймає геолокацію, координати, адресу або картографічне посилання, запитує азимут і створює інтерактивну карту OpenStreetMap із сектором базової станції шириною 120° — по 60° ліворуч і праворуч від азимуту.
+DUGA будує на OpenStreetMap сектори базових станцій шириною 120° та дозволяє одночасно працювати з трьома точками, окремими азимутами й радіусами, повноекранною картою та спільним полігоном перетину секторів.
 
-На карті відображаються:
+## Поточна архітектура
 
-- точка «БС»;
-- напівпрозорий червоний сектор;
-- плавне згасання кольору до зовнішнього краю;
-- дві червоні межові лінії;
-- зовнішня дуга;
-- заданий радіус сектора.
+- Telegram Bot API — webhook.
+- FastAPI + Uvicorn — API та Telegram Mini App.
+- OpenStreetMap + Leaflet — карта.
+- PostgreSQL — постійне зберігання користувачів; `DATABASE_URL` обов'язковий у production.
+- Render або інший Docker-сумісний always-on web service — хостинг застосунку.
 
-## Налаштування
+## Змінні середовища
 
-Скопіюйте `.env.example` у `.env` і заповніть:
+Скопіюйте `.env.example` у `.env` для локального запуску. Реальні токени та секрети ніколи не додавайте в Git.
 
 ```env
-TELEGRAM_BOT_TOKEN=8789151694:AAGIlOMm03GJxPYUaZlY4T5-n3TvpB3sS_Q
-PUBLIC_BASE_URL=https://публічна-адреса-сервера
-MAP_SECRET=f91c8472d0334a0f978c21e6ab81d9906c57eabc47d831a
+TELEGRAM_BOT_TOKEN=PASTE_NEW_BOTFATHER_TOKEN_HERE
+PUBLIC_BASE_URL=https://your-public-domain.example
+MAP_SECRET=replace-with-a-long-random-secret
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+ADMIN_TELEGRAM_USER_IDS=123456789
 DEFAULT_RADIUS_KM=15
-ALLOWED_TELEGRAM_USER_IDS=
-NOMINATIM_USER_AGENT=OSM-BS-Sector-Telegram-Bot/1.0 (contact: email@example.com)
+NOMINATIM_USER_AGENT=DUGA/3.0 (contact: your-email@example.com)
+DUGA_COLD_START_NOTICE=false
+LOG_LEVEL=INFO
 ```
-
-`.env` не потрібно завантажувати в GitHub.
 
 ## Локальний запуск
 
 ```bash
 python -m venv .venv
-```
-
-Windows:
-
-```bash
-.venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app:api --host 0.0.0.0 --port 8000
-```
-
-Linux:
-
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app:api --host 0.0.0.0 --port 8000
+uvicorn entrypoint:api --host 0.0.0.0 --port 8000
 ```
 
 ## Docker
 
 ```bash
-docker build -t osm-bs-sector-bot .
-docker run --env-file .env -p 8000:8000 osm-bs-sector-bot
+docker build -t duga .
+docker run --env-file .env -p 8000:8000 duga
 ```
 
-## Render
+## Production
 
-У репозиторії є `render.yaml`. Створіть у Render Blueprint із цього репозиторію, заповніть змінні середовища, а `PUBLIC_BASE_URL` встановіть рівним HTTPS-адресі створеного сервісу.
+Для стабільної роботи 24/7 використовуйте web service без sleep/scale-to-zero. Безкоштовний Render Web Service засинає після простою і не підходить для постійної production-роботи.
 
-## Використання
+Рекомендована конфігурація поточного проєкту:
 
-1. Відправте боту `/start`.
-2. Надішліть адресу, координати, посилання або геолокацію.
-3. Введіть азимут, наприклад `125`.
-4. Для іншого радіуса введіть два числа: `125 8`, де `8` — кілометри.
+1. Docker web service з одним постійно активним інстансом.
+2. `PUBLIC_BASE_URL` — HTTPS-адреса сервісу.
+3. PostgreSQL через `DATABASE_URL`.
+4. Health check — `/ready`.
+5. Liveness endpoint — `/live`.
+6. Telegram webhook реєструється автоматично під час старту сервісу.
+7. `DUGA_COLD_START_NOTICE=false` для always-on хостингу.
 
-Допустимі межі: азимут `0–359.99°`, радіус `0.1–100 км`.
+`render.yaml` використовує актуальний формат Render Blueprint, але тариф/instance type слід обирати в акаунті відповідно до потрібної доступності.
+
+## Безпека
+
+- Не публікуйте `TELEGRAM_BOT_TOKEN`, `MAP_SECRET`, `DATABASE_URL` та інші секрети.
+- Якщо секрет уже потрапив у Git-історію, простого видалення з поточного README недостатньо — його потрібно замінити/відкликати.
+- `.env` уже виключений через `.gitignore`.
+
+## Перевірка стану
+
+- `/live` — процес працює.
+- `/ready` — процес працює і PostgreSQL доступний.
+- `/health` — сумісний alias для readiness.
+- `/status` — діагностика для адміністратора Telegram.
