@@ -2,7 +2,7 @@ services:
   - type: web
     name: osm-bs-sector-bot
     runtime: docker
-    autoDeployTrigger: commit
+    autoDeployTrigger: checksPass
     healthCheckPath: /ready
     maxShutdownDelaySeconds: 60
     envVars:
