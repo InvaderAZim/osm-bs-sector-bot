@@ -1,46 +1,77 @@
 # DUGA on Cloudflare Workers
 
-Ця гілка `cloudflare-worker` ізольована від production-гілки `main`, тому поточний Render deployment не ламається.
+Гілка `cloudflare-worker` містить повний backend DUGA для Cloudflare Workers і не змінює поточну production-гілку `main` до моменту фактичного перемикання Telegram webhook.
 
-## Поточний етап
+## Що вже перенесено
 
-Cloudflare Worker вже містить:
-
-- Telegram Mini App на `/app`;
-- до 3 секторів одночасно;
-- окремі азимути та радіуси 1/3/5/10 км;
-- повноекранний режим із кнопкою виходу внизу;
-- режим `Спільний полігон`;
-- пошук адрес через OpenStreetMap/Nominatim;
+- Telegram webhook без long polling.
+- Існуюча PostgreSQL/Neon база через `DATABASE_URL` — користувачі, телефони та статуси залишаються в тій самій базі, тому окрема міграція даних не потрібна.
+- Обов'язкове надсилання власного номера телефону.
+- Статуси `pending`, `approved`, `blocked`.
+- Адмін-категорії користувачів, схвалення, блокування та відновлення.
+- CSV-експорт користувачів.
+- Розсилка всім зареєстрованим користувачам.
+- `/help`, `/status`.
+- Mini App: до 3 секторів, окремі азимути, радіуси 1/3/5/10 км, fullscreen, спільний полігон, пошук адрес.
+- Перевірка Telegram Mini App `initData` і прав доступу до API.
 - `/live`, `/ready`, `/health`.
 
-Telegram webhook поки навмисно НЕ переключений на Cloudflare. До завершення перенесення авторизації/бази користувачів бот продовжує працювати через Render.
+## Cloudflare Workers Builds
 
-## Cloudflare Git deployment
+Production branch:
 
-На екрані створення Worker:
+```text
+cloudflare-worker
+```
 
-- Project name: `osm-bs-sector-bot`
-- Production branch: `cloudflare-worker`
-- Build command: залишити порожнім
-- Deploy command: `npx wrangler deploy`
+Build command: можна залишити порожнім.
 
-`wrangler.jsonc` використовує Python Workers без зовнішніх Python-пакетів, тому окремий `pywrangler` на цьому етапі не потрібен.
+Deploy command:
 
-Після першого успішного deploy перевірити:
+```text
+npx wrangler deploy
+```
 
-- `/live`
-- `/app`
-- пошук адреси
-- 3 точки/сектори
-- fullscreen
-- спільний полігон
+## Обов'язкові Variables and Secrets
 
-## Наступний етап
+Worker → Settings → Variables and Secrets:
 
-1. Створити Cloudflare D1 database `duga-users`.
-2. Додати D1 binding `DB` у `wrangler.jsonc`.
-3. Перенести користувачів/статуси/телефони з PostgreSQL у D1.
-4. Перенести Telegram webhook та admin/access flow у Worker.
-5. Переключити Telegram webhook на `https://<worker>.workers.dev/telegram-webhook`.
-6. Лише після повної перевірки вимкнути Render.
+- `TELEGRAM_BOT_TOKEN` — актуальний токен BotFather, тип Secret.
+- `DATABASE_URL` — той самий PostgreSQL/Neon connection string, який використовує поточний DUGA, тип Secret.
+- `ADMIN_TELEGRAM_USER_IDS` — Telegram ID адміністратора або кілька ID через кому.
+- `PUBLIC_BASE_URL` — HTTPS URL нового Cloudflare Worker без `/` в кінці.
+- `TELEGRAM_WEBHOOK_SECRET` — довгий випадковий секрет для перевірки Telegram webhook, тип Secret.
+- `SETUP_KEY` — окремий довгий одноразовий секрет для першого перемикання webhook, тип Secret.
+- `NOMINATIM_USER_AGENT` — наприклад `DUGA/4.0 (contact: admin@example.com)`.
+
+`MAP_SECRET`, Uvicorn, Docker і локальна SQLite база для Cloudflare-версії не потрібні.
+
+## Перемикання Telegram webhook
+
+Після успішного deploy та додавання всіх secrets один раз відкрийте:
+
+```text
+https://<worker-domain>/admin/setup-webhook?key=<SETUP_KEY>
+```
+
+У відповіді має бути:
+
+```json
+{"ok":true}
+```
+
+Після цього Telegram працюватиме напряму через Cloudflare Workers. Render більше не потрібен як backend.
+
+Після успішного перемикання рекомендовано змінити або видалити `SETUP_KEY`.
+
+## Перевірка
+
+- `https://<worker-domain>/live`
+- `https://<worker-domain>/ready`
+- Telegram: `/start`
+- Telegram admin: `/status`
+- Mini App: запуск, пошук адреси, 3 точки, fullscreen і спільний полігон.
+
+## Безпека
+
+Не додавайте `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`, `TELEGRAM_WEBHOOK_SECRET` або `SETUP_KEY` у Git. Вони мають зберігатися тільки як Cloudflare Secrets.
