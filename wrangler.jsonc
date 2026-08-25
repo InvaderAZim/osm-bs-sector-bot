@@ -1,9 +1,16 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "osm-bs-sector-bot",
-  "main": "src/main.py",
+  "main": "src/worker.js",
   "compatibility_date": "2026-08-25",
-  "compatibility_flags": ["python_workers"],
+  "compatibility_flags": ["nodejs_compat"],
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.html"],
+      "fallthrough": true
+    }
+  ],
   "observability": {
     "enabled": true
   }
