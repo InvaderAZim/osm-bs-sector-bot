@@ -382,9 +382,10 @@ async function verifyTelegramInitData(env, initData) {
   const hash = params.get('hash');
   if (!hash) return null;
   params.delete('hash');
-  params.delete('signature');
-  const pairs = [...params.entries()].sort(([a],[b]) => a.localeCompare(b));
-  const check = pairs.map(([k,v]) => `${k}=${v}`).join('\n');
+  const check = [...params.entries()]
+    .map(([key, value]) => `${key}=${value}`)
+    .sort()
+    .join('\n');
   const secret = await hmac(new TextEncoder().encode('WebAppData'), env.TELEGRAM_BOT_TOKEN);
   const signature = await hmac(new Uint8Array(secret), check);
   if (toHex(signature) !== hash.toLowerCase()) return null;
