@@ -4,11 +4,16 @@ import json
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from js import fetch
+from js import Headers, Object, Request as JSRequest, fetch
+from pyodide.ffi import to_js as _to_js
 from workers import Response, WorkerEntrypoint
 
 
 APP_HTML = (Path(__file__).parent / "app.html").read_text(encoding="utf-8")
+
+
+def to_js(value):
+    return _to_js(value, dict_converter=Object.fromEntries)
 
 
 def json_response(payload: dict, status: int = 200) -> Response:
@@ -56,7 +61,11 @@ class Default(WorkerEntrypoint):
                 f"?format=jsonv2&limit=8&addressdetails=1&q={quote(query)}"
             )
             try:
-                upstream = await fetch(endpoint)
+                headers = Headers.new()
+                headers.set("Accept", "application/json")
+                headers.set("User-Agent", "DUGA/3.0 (Cloudflare Workers; Telegram Mini App)")
+                upstream_request = JSRequest.new(endpoint, to_js({"headers": headers}))
+                upstream = await fetch(upstream_request)
                 if not upstream.ok:
                     return json_response({"results": []})
                 items = await upstream.json()
