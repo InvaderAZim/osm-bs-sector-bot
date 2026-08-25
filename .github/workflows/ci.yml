@@ -2,7 +2,7 @@ name: DUGA CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, cloudflare-worker]
   pull_request:
     branches: [main]
 
@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  python-smoke:
+    if: github.ref_name == 'main' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,3 +42,26 @@ jobs:
           USER_DB_PATH: "/tmp/duga-ci.sqlite3"
           DUGA_COLD_START_NOTICE: "false"
         run: python -c "import entrypoint; assert entrypoint.api is not None; print('DUGA import OK')"
+
+  cloudflare-smoke:
+    if: github.ref_name == 'cloudflare-worker'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check Worker syntax
+        run: npm run check
+
+      - name: Bundle Worker with Wrangler
+        run: npx wrangler deploy --dry-run
