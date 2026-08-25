@@ -75,3 +75,5 @@ https://<worker-domain>/admin/setup-webhook?key=<SETUP_KEY>
 ## Безпека
 
 Не додавайте `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`, `TELEGRAM_WEBHOOK_SECRET` або `SETUP_KEY` у Git. Вони мають зберігатися тільки як Cloudflare Secrets.
+
+<!-- Cloudflare production build trigger: 2026-08-25 -->
