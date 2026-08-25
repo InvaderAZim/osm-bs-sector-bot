@@ -1,0 +1,43 @@
+name: DUGA CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify dependency graph
+        run: pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Import production application
+        env:
+          TELEGRAM_BOT_TOKEN: "123456789:TEST_TOKEN_FOR_IMPORT_ONLY"
+          PUBLIC_BASE_URL: "https://example.invalid"
+          MAP_SECRET: "ci-only-map-secret-not-used-in-production"
+          ADMIN_TELEGRAM_USER_IDS: "1"
+          USER_DB_PATH: "/tmp/duga-ci.sqlite3"
+          DUGA_COLD_START_NOTICE: "false"
+        run: python -c "import entrypoint; assert entrypoint.api is not None; print('DUGA import OK')"
