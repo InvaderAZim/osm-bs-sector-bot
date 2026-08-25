@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -8,9 +9,16 @@ from fastapi import HTTPException, Request
 from telegram import Update
 
 import launcher as bot
+import postgres_backend
 
 TELEGRAM_PATH = "/telegram-webhook"
 WEBHOOK_SECRET = hashlib.sha256(bot.settings().secret.encode("utf-8")).hexdigest()
+COLD_START_NOTICE_ENABLED = os.getenv("DUGA_COLD_START_NOTICE", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 telegram_application = None
 process_started_at = time.monotonic()
 cold_start_notice_sent = False
@@ -34,7 +42,8 @@ async def webhook_lifespan(_app):
     await application.bot.set_webhook(
         url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
+        drop_pending_updates=False,
+        max_connections=20,
         secret_token=WEBHOOK_SECRET,
     )
 
@@ -45,14 +54,19 @@ async def webhook_lifespan(_app):
         yield
     finally:
         telegram_application = None
-        await application.stop()
-        await application.shutdown()
+        try:
+            await application.stop()
+        finally:
+            await application.shutdown()
+            postgres_backend.close_pool()
 
 
 async def _send_cold_start_notice(update: Update) -> bool:
-    """Notify the user who woke the service and ask them to repeat the action."""
+    """Optional compatibility notice for sleeping free-tier hosting."""
     global cold_start_notice_sent
 
+    if not COLD_START_NOTICE_ENABLED:
+        return False
     if cold_start_notice_sent or time.monotonic() - process_started_at > 90:
         return False
 
@@ -89,9 +103,6 @@ async def telegram_webhook(request: Request):
     payload = await request.json()
     update = Update.de_json(payload, telegram_application.bot)
 
-    # The first Telegram event wakes a sleeping Render instance. Do not run the
-    # requested action immediately: external services and the database may still
-    # be reconnecting. Tell the user to repeat it after the service is warm.
     if await _send_cold_start_notice(update):
         return {"ok": True, "warming_up": True}
 
@@ -99,7 +110,6 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
-# Replace the original long-polling lifespan. Webhooks generate inbound traffic,
-# wake the free Render service and avoid competing getUpdates processes.
+# Webhooks avoid competing getUpdates processes and are the production transport.
 bot.api.router.lifespan_context = webhook_lifespan
 api = bot.api
