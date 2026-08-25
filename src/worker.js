@@ -134,16 +134,21 @@ function mainKeyboard(env, userId, url) {
     [{ text: '🚀 Запустити DUGA', web_app: { url: `${url}/app` } }],
   ];
   if (isAdmin(env, userId)) {
-    rows.push([{ text: '👥 Користувачі' }]);
-    rows.push([{ text: '📢 Повідомлення користувачам' }]);
+    rows.push([{ text: '👥 Користувачі', callback_data: 'users:categories' }]);
+    rows.push([{ text: '📢 Повідомлення користувачам', callback_data: 'main:broadcast' }]);
   }
-  rows.push([{ text: '🔄 Перезапустити бота' }]);
-  rows.push([{ text: '❌ Скасувати' }]);
-  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+  rows.push([{ text: '🔄 Перезапустити бота', callback_data: 'main:restart' }]);
+  rows.push([{ text: '❌ Скасувати', callback_data: 'main:cancel' }]);
+  return { inline_keyboard: rows };
 }
 
 async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:') {
-  return tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: mainKeyboard(env, userId, url) });
+  await tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: { remove_keyboard: true } });
+  return tg(env, 'sendMessage', {
+    chat_id: chatId,
+    text: 'Меню DUGA:',
+    reply_markup: mainKeyboard(env, userId, url),
+  });
 }
 
 function htmlEscape(s) {
@@ -261,12 +266,25 @@ async function runBroadcast(env, adminChatId, text, url) {
 async function handleCallback(env, query, url) {
   const user = query.from;
   const chatId = query.message?.chat?.id || user.id;
+  const data = query.data || '';
+  if (data === 'main:restart' || data === 'main:cancel') {
+    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+    if (data === 'main:cancel' && isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
+    return sendMain(env, chatId, user.id, url, data === 'main:cancel' ? 'Дію скасовано.' : 'Бота перезапущено.');
+  }
   if (!isAdmin(env, user.id)) {
     await tg(env, 'answerCallbackQuery', { callback_query_id: query.id, text: 'Недостатньо прав', show_alert: true });
     return;
   }
-  const data = query.data || '';
   await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+  if (data === 'main:broadcast') {
+    await setBroadcastState(env, user.id, true);
+    return tg(env, 'sendMessage', {
+      chat_id: chatId,
+      text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.',
+      reply_markup: { keyboard: [[{ text: '❌ Скасувати розсилку' }]], resize_keyboard: true, is_persistent: true },
+    });
+  }
   if (data === 'users:categories') return showUsersMenu(env, chatId);
   if (data.startsWith('users:list:')) return showCategory(env, chatId, data.split(':').at(-1));
   if (data === 'users:export') return exportUsers(env, chatId);
