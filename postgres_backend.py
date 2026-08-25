@@ -4,14 +4,18 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from threading import Lock
 from typing import Any, Iterable
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 import launcher as bot
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_POOL: ConnectionPool | None = None
+_POOL_LOCK = Lock()
 
 
 class ResultAdapter:
@@ -40,24 +44,54 @@ class ConnectionAdapter:
         cursor = self.connection.execute(self._translate(sql), tuple(params or ()))
         return ResultAdapter(cursor)
 
-    def __enter__(self):
-        self.connection.__enter__()
-        return self
+
+class PooledConnectionContext:
+    def __init__(self, pool: ConnectionPool):
+        self._context = pool.connection(timeout=5)
+        self._connection: psycopg.Connection | None = None
+
+    def __enter__(self) -> ConnectionAdapter:
+        self._connection = self._context.__enter__()
+        return ConnectionAdapter(self._connection)
 
     def __exit__(self, exc_type, exc, tb):
-        return self.connection.__exit__(exc_type, exc, tb)
+        return self._context.__exit__(exc_type, exc, tb)
 
 
-def postgres_db() -> ConnectionAdapter:
+def _get_pool() -> ConnectionPool:
+    global _POOL
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                _POOL = ConnectionPool(
+                    conninfo=DATABASE_URL,
+                    min_size=0,
+                    max_size=5,
+                    timeout=5,
+                    max_idle=60,
+                    kwargs={
+                        "row_factory": dict_row,
+                        "connect_timeout": 5,
+                        "application_name": "duga-telegram-mini-app",
+                    },
+                    open=True,
+                    name="duga-postgres-pool",
+                )
+    return _POOL
+
+
+def close_pool() -> None:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is not None:
+            _POOL.close()
+            _POOL = None
+
+
+def postgres_db():
     if not DATABASE_URL:
         return _sqlite_db()
-    connection = psycopg.connect(
-        DATABASE_URL,
-        row_factory=dict_row,
-        connect_timeout=10,
-        application_name="duga-telegram-mini-app",
-    )
-    return ConnectionAdapter(connection)
+    return PooledConnectionContext(_get_pool())
 
 
 def migrate_sqlite_users(connection: ConnectionAdapter) -> int:
@@ -65,6 +99,7 @@ def migrate_sqlite_users(connection: ConnectionAdapter) -> int:
     if not sqlite_path.exists() or sqlite_path.stat().st_size == 0:
         return 0
 
+    source = None
     try:
         source = sqlite3.connect(sqlite_path)
         source.row_factory = sqlite3.Row
@@ -73,10 +108,11 @@ def migrate_sqlite_users(connection: ConnectionAdapter) -> int:
         bot.log.exception("Could not read the previous SQLite user database")
         return 0
     finally:
-        try:
-            source.close()
-        except Exception:
-            pass
+        if source is not None:
+            try:
+                source.close()
+            except Exception:
+                pass
 
     migrated = 0
     for row in rows:
@@ -112,6 +148,7 @@ def migrate_sqlite_users(connection: ConnectionAdapter) -> int:
 
 def postgres_init_db() -> None:
     if not DATABASE_URL:
+        bot.log.warning("DATABASE_URL is missing; using temporary SQLite fallback")
         _sqlite_init_db()
         return
 
