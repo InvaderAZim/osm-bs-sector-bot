@@ -28,7 +28,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "2. Вкажіть радіус.\n"
         "3. Введіть азимут.\n"
         "4. Отримайте сектор на карті.\n\n"
-        "Якщо бот не відповідає після простою — зачекайте близько 30 секунд і повторіть дію."
+        "У разі короткого технічного збою повторіть дію через кілька секунд."
     )
 
 
@@ -58,7 +58,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "",
         "✅ Сервер: працює",
         f"{'✅' if db_ok else '❌'} База даних: {'працює' if db_ok else 'помилка'}",
-        "✅ Telegram: команда отримана",
+        "✅ Telegram webhook: працює",
         f"🕒 {now}",
     ]
     if db_error:
