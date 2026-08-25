@@ -414,6 +414,7 @@ async function verifyTelegramInitData(env, initData) {
 
 async function webAppAccess(env, request) {
   const initData = request.headers.get('X-Telegram-Init-Data') || '';
+  if (!initData) return { ok: false, status: 401, detail: 'Надішліть /start боту та відкрийте DUGA новою кнопкою під повідомленням.' };
   const user = await verifyTelegramInitData(env, initData);
   if (!user) return { ok: false, status: 401, detail: 'Telegram authorization failed' };
   const row = await upsertUser(env, user);
