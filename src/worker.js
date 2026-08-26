@@ -253,11 +253,11 @@ async function tgDocument(env, chatId, filename, text, caption = '') {
 const START_BUTTON = 'START';
 const BACK_BUTTON = '⬅️ Назад';
 
-function navigationKeyboard(extraRows = []) {
+export function navigationKeyboard(extraRows = []) {
   return {
     keyboard: [
       ...extraRows,
-      [{ text: START_BUTTON }, { text: BACK_BUTTON }],
+      [{ text: START_BUTTON }],
     ],
     resize_keyboard: true,
     is_persistent: true,

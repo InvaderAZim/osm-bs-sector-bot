@@ -2,6 +2,7 @@ import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest';
 import worker, {
   authorizedAppHtml,
+  navigationKeyboard,
   shouldDeleteIncomingMessage,
   verifyTelegramInitData,
 } from '../src/worker.js';
@@ -28,6 +29,12 @@ async function signedInitData(botToken, user, authDate = Math.floor(Date.now() /
 }
 
 describe('Telegram webhook security', () => {
+  it('keeps only START in the persistent navigation row', () => {
+    const keyboard = navigationKeyboard();
+    expect(keyboard.is_persistent).toBe(true);
+    expect(keyboard.keyboard).toEqual([[{ text: 'START' }]]);
+  });
+
   it('fails closed when the webhook secret is missing', async () => {
     const response = await invoke(new Request('https://example.test/telegram-webhook', {
       method: 'POST',
