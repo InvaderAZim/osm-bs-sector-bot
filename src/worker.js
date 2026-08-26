@@ -37,6 +37,12 @@ async function ensureSchema(env) {
         awaiting_broadcast BOOLEAN NOT NULL DEFAULT FALSE,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS temporary_bot_messages(
+        chat_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY(chat_id,message_id)
+      )`;
       for (const id of adminIds(env)) {
         await sql`INSERT INTO users(user_id,status,created_at,updated_at)
           VALUES(${id},'approved',NOW(),NOW())
@@ -98,7 +104,7 @@ function baseUrl(env, request) {
   return String(env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/$/, '');
 }
 
-async function tg(env, method, payload = {}) {
+async function tg(env, method, payload = {}, options = {}) {
   if (!env.TELEGRAM_BOT_TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is missing');
   const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: 'POST',
@@ -107,7 +113,71 @@ async function tg(env, method, payload = {}) {
   });
   const data = await r.json();
   if (!data.ok) throw new Error(`Telegram ${method}: ${data.description || r.status}`);
+  if (method === 'sendMessage' && !options.preserve) {
+    await rememberTemporaryBotMessage(env, payload.chat_id, data.result?.message_id);
+  }
   return data.result;
+}
+
+function cleanupError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function rememberTemporaryBotMessage(env, chatId, messageId) {
+  const numericChatId = Number(chatId);
+  const numericMessageId = Number(messageId);
+  if (!Number.isSafeInteger(numericChatId) || !Number.isSafeInteger(numericMessageId)) return;
+  try {
+    await ensureSchema(env);
+    const sql = sqlClient(env);
+    await sql`INSERT INTO temporary_bot_messages(chat_id,message_id,created_at)
+      VALUES(${numericChatId},${numericMessageId},NOW())
+      ON CONFLICT(chat_id,message_id) DO NOTHING`;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: 'Failed to remember temporary Telegram message',
+      chat_id: numericChatId,
+      message_id: numericMessageId,
+      error: cleanupError(error),
+    }));
+  }
+}
+
+async function safeDeleteMessage(env, chatId, messageId) {
+  if (!Number.isSafeInteger(Number(chatId)) || !Number.isSafeInteger(Number(messageId))) return false;
+  try {
+    await tg(env, 'deleteMessage', { chat_id: chatId, message_id: messageId }, { preserve: true });
+    return true;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: 'Telegram message cleanup skipped',
+      chat_id: Number(chatId),
+      message_id: Number(messageId),
+      error: cleanupError(error),
+    }));
+    return false;
+  }
+}
+
+async function cleanupTemporaryBotMessages(env, chatId) {
+  const numericChatId = Number(chatId);
+  if (!Number.isSafeInteger(numericChatId)) return;
+  let rows;
+  try {
+    await ensureSchema(env);
+    const sql = sqlClient(env);
+    rows = await sql`DELETE FROM temporary_bot_messages
+      WHERE chat_id=${numericChatId}
+      RETURNING message_id`;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: 'Failed to load temporary Telegram messages for cleanup',
+      chat_id: numericChatId,
+      error: cleanupError(error),
+    }));
+    return;
+  }
+  await Promise.all(rows.map(row => safeDeleteMessage(env, numericChatId, Number(row.message_id))));
 }
 
 async function tgDocument(env, chatId, filename, text, caption = '') {
@@ -142,8 +212,8 @@ function mainKeyboard(env, userId, url) {
   return { inline_keyboard: rows };
 }
 
-async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:') {
-  await tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: { remove_keyboard: true } });
+async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:', options = {}) {
+  await tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: { remove_keyboard: true } }, { preserve: options.preserveText });
   return tg(env, 'sendMessage', {
     chat_id: chatId,
     text: 'Меню DUGA:',
@@ -172,7 +242,7 @@ async function notifyAdminsPending(env, row) {
     { text: '⛔ Заблокувати', callback_data: `manage:revoke:${row.user_id}` },
   ]] };
   for (const adminId of adminIds(env)) {
-    try { await tg(env, 'sendMessage', { chat_id: adminId, text, parse_mode: 'HTML', reply_markup }); } catch (_) {}
+    try { await tg(env, 'sendMessage', { chat_id: adminId, text, parse_mode: 'HTML', reply_markup }, { preserve: true }); } catch (_) {}
   }
 }
 
@@ -264,11 +334,11 @@ async function runBroadcast(env, adminChatId, text, url) {
   let delivered = 0, failed = 0;
   for (const row of rows) {
     try {
-      await tg(env, 'sendMessage', { chat_id: Number(row.user_id), text: `📢 Повідомлення адміністратора\n\n${text}` });
+      await tg(env, 'sendMessage', { chat_id: Number(row.user_id), text: `📢 Повідомлення адміністратора\n\n${text}` }, { preserve: true });
       delivered++;
     } catch (_) { failed++; }
   }
-  await sendMain(env, adminChatId, adminChatId, url, `✅ Розсилку завершено.\nДоставлено: ${delivered}\nНе доставлено: ${failed}`);
+  await sendMain(env, adminChatId, adminChatId, url, `✅ Розсилку завершено.\nДоставлено: ${delivered}\nНе доставлено: ${failed}`, { preserveText: true });
 }
 
 async function handleCallback(env, query, url) {
@@ -303,22 +373,19 @@ async function handleCallback(env, query, url) {
   if (data.startsWith('manage:restore:')) {
     const id = Number(data.split(':').at(-1));
     await setStatus(env, id, 'approved');
-    await tg(env, 'sendMessage', { chat_id: chatId, text: `✅ Доступ користувачу ${id} надано.` });
-    try { await sendMain(env, id, id, url, '✅ Адміністратор надав вам доступ до DUGA.'); } catch (_) {}
+    await tg(env, 'sendMessage', { chat_id: chatId, text: `✅ Доступ користувачу ${id} надано.` }, { preserve: true });
+    try { await sendMain(env, id, id, url, '✅ Адміністратор надав вам доступ до DUGA.', { preserveText: true }); } catch (_) {}
     return;
   }
   if (data.startsWith('manage:revoke:')) {
     const id = Number(data.split(':').at(-1));
     await setStatus(env, id, 'blocked');
-    await tg(env, 'sendMessage', { chat_id: chatId, text: `⛔ Доступ користувачу ${id} скасовано.` });
-    try { await tg(env, 'sendMessage', { chat_id: id, text: '⛔ Ваш доступ до DUGA скасовано адміністратором.' }); } catch (_) {}
+    await tg(env, 'sendMessage', { chat_id: chatId, text: `⛔ Доступ користувачу ${id} скасовано.` }, { preserve: true });
+    try { await tg(env, 'sendMessage', { chat_id: id, text: '⛔ Ваш доступ до DUGA скасовано адміністратором.' }, { preserve: true }); } catch (_) {}
   }
 }
 
-async function processTelegramUpdate(env, update, url) {
-  if (update.callback_query) return handleCallback(env, update.callback_query, url);
-  const msg = update.message || update.edited_message;
-  if (!msg?.from || !msg.chat) return;
+async function processTelegramMessage(env, msg, url) {
   const user = msg.from;
   const chatId = msg.chat.id;
   let row = await upsertUser(env, user);
@@ -395,6 +462,25 @@ async function processTelegramUpdate(env, update, url) {
     return;
   }
   await sendMain(env, chatId, user.id, url);
+}
+
+async function processTelegramUpdate(env, update, url) {
+  if (update.callback_query) {
+    const query = update.callback_query;
+    const user = query.from;
+    const chatId = query.message?.chat?.id || user?.id;
+    if (user) await cleanupTemporaryBotMessages(env, chatId);
+    return handleCallback(env, query, url);
+  }
+  const msg = update.message || update.edited_message;
+  if (!msg?.from || !msg.chat) return;
+  const adminMessage = isAdmin(env, msg.from.id);
+  await cleanupTemporaryBotMessages(env, msg.chat.id);
+  try {
+    return await processTelegramMessage(env, msg, url);
+  } finally {
+    if (!adminMessage) await safeDeleteMessage(env, msg.chat.id, msg.message_id);
+  }
 }
 
 function toHex(bytes) {
