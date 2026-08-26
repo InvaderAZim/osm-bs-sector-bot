@@ -4,6 +4,7 @@ import worker, {
   authorizedAppHtml,
   navigationKeyboard,
   shouldDeleteIncomingMessage,
+  telegramInitDataFromUrl,
   verifyTelegramInitData,
 } from '../src/worker.js';
 
@@ -93,7 +94,17 @@ describe('Telegram Mini App access', () => {
     const html = await response.text();
     expect(response.status).toBe(200);
     expect(html).toContain("fetch('/api/app'");
+    expect(html).toContain("get('tgWebAppData')");
     expect(html).not.toContain("L.map('map'");
+  });
+
+  it('recovers Telegram initData from the Mini App URL when the helper script is unavailable', () => {
+    const initData = 'auth_date=123&user=%7B%22id%22%3A456%7D&hash=abc';
+    const encoded = encodeURIComponent(initData);
+    expect(telegramInitDataFromUrl(`https://example.test/app#tgWebAppData=${encoded}&tgWebAppVersion=9.1`)).toBe(initData);
+    expect(telegramInitDataFromUrl(`https://example.test/app?tgWebAppData=${encoded}`)).toBe(initData);
+    expect(telegramInitDataFromUrl('https://example.test/app', 'from-telegram-js')).toBe('from-telegram-js');
+    expect(telegramInitDataFromUrl('not a url')).toBe('');
   });
 
   it('rejects direct app source access without Telegram initData', async () => {
@@ -104,6 +115,7 @@ describe('Telegram Mini App access', () => {
   it('renders geocoder labels without assigning untrusted HTML', () => {
     const html = authorizedAppHtml();
     expect(html).toContain('label.textContent=');
+    expect(html).toContain("get('tgWebAppData')");
     expect(html).not.toContain('d.innerHTML=');
   });
 

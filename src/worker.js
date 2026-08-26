@@ -892,12 +892,27 @@ const HTML_HEADERS = {
   'Permissions-Policy': 'geolocation=(self), camera=(), microphone=()',
 };
 
+export function telegramInitDataFromUrl(rawUrl, telegramInitData = '') {
+  const clientInitData = String(telegramInitData || '');
+  if (clientInitData) return clientInitData;
+  try {
+    const url = new URL(String(rawUrl));
+    for (const encodedParameters of [url.hash.replace(/^#/, ''), url.search.replace(/^\?/, '')]) {
+      const value = new URLSearchParams(encodedParameters).get('tgWebAppData');
+      if (value) return value;
+    }
+  } catch (_) {}
+  return '';
+}
+
 function appBootstrapHtml() {
-  return `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>DUGA</title><script src="https://telegram.org/js/telegram-web-app.js?61"></script><style>html,body{margin:0;min-height:100%;background:#0f1117;color:#fff;font:600 16px system-ui}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;text-align:center}</style></head><body><main id="status">Перевірка доступу…</main><script>(async()=>{const box=document.getElementById('status');const initData=window.Telegram?.WebApp?.initData||'';window.__DUGA_INIT_DATA__=initData;try{window.Telegram?.WebApp?.ready();window.Telegram?.WebApp?.expand();try{sessionStorage.setItem('duga:initData',initData)}catch(error){}const response=await fetch('/api/app',{headers:{'X-Telegram-Init-Data':initData},cache:'no-store'});if(!response.ok){const data=await response.json().catch(()=>({}));box.textContent=data.detail||'Доступ відсутній';return}const html=await response.text();document.open();document.write(html);document.close()}catch(error){box.textContent='Не вдалося перевірити доступ. Відкрийте DUGA з меню бота.'}})();</script></body></html>`;
+  const readInitData = `(${telegramInitDataFromUrl.toString()})`;
+  return `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>DUGA</title><script src="https://telegram.org/js/telegram-web-app.js?61"></script><style>html,body{margin:0;min-height:100%;background:#0f1117;color:#fff;font:600 16px system-ui}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;text-align:center}</style></head><body><main id="status">Перевірка доступу…</main><script>(async()=>{const box=document.getElementById('status');const readTelegramInitData=${readInitData};const initData=readTelegramInitData(window.location.href,window.Telegram?.WebApp?.initData);window.__DUGA_INIT_DATA__=initData;try{window.Telegram?.WebApp?.ready();window.Telegram?.WebApp?.expand();try{sessionStorage.setItem('duga:initData',initData)}catch(error){}const response=await fetch('/api/app',{headers:{'X-Telegram-Init-Data':initData},cache:'no-store'});if(!response.ok){const data=await response.json().catch(()=>({}));box.textContent=data.detail||'Доступ відсутній';return}const html=await response.text();document.open();document.write(html);document.close()}catch(error){box.textContent='Не вдалося перевірити доступ. Відкрийте DUGA з меню бота.'}})();</script></body></html>`;
 }
 
 export function authorizedAppHtml() {
-  const authenticatedFetch = `<script>(function(){const rawFetch=window.fetch.bind(window);window.fetch=(input,init={})=>{try{const url=new URL(input instanceof Request?input.url:String(input),location.href);if(url.origin===location.origin&&url.pathname.startsWith('/api/')){let initData=window.__DUGA_INIT_DATA__||window.Telegram?.WebApp?.initData||'';try{initData=initData||sessionStorage.getItem('duga:initData')||''}catch(error){}const headers=new Headers(input instanceof Request?input.headers:init.headers||{});headers.set('X-Telegram-Init-Data',initData);init={...init,headers,cache:'no-store'}}}catch(error){}return rawFetch(input,init)}})();</script>`;
+  const readInitData = `(${telegramInitDataFromUrl.toString()})`;
+  const authenticatedFetch = `<script>(function(){const readTelegramInitData=${readInitData};const rawFetch=window.fetch.bind(window);window.fetch=(input,init={})=>{try{const url=new URL(input instanceof Request?input.url:String(input),location.href);if(url.origin===location.origin&&url.pathname.startsWith('/api/')){let initData=window.__DUGA_INIT_DATA__||readTelegramInitData(window.location.href,window.Telegram?.WebApp?.initData);try{initData=initData||sessionStorage.getItem('duga:initData')||''}catch(error){}const headers=new Headers(input instanceof Request?input.headers:init.headers||{});headers.set('X-Telegram-Init-Data',initData);init={...init,headers,cache:'no-store'}}}catch(error){}return rawFetch(input,init)}})();</script>`;
   return APP_HTML_RAW.replace('</head>', `${authenticatedFetch}</head>`);
 }
 
