@@ -198,8 +198,7 @@ function navigationKeyboard(extraRows = []) {
   return {
     keyboard: [
       ...extraRows,
-      [{ text: START_BUTTON }],
-      [{ text: BACK_BUTTON }],
+      [{ text: START_BUTTON }, { text: BACK_BUTTON }],
     ],
     resize_keyboard: true,
     is_persistent: true,
