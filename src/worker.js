@@ -279,7 +279,6 @@ function mainKeyboard(env, userId, url) {
     rows.push([{ text: '📢 Повідомлення користувачам', callback_data: 'main:broadcast' }]);
   }
   rows.push([{ text: '🔄 Перезапустити бота', callback_data: 'main:restart' }]);
-  rows.push([{ text: BACK_BUTTON, callback_data: 'main:back' }]);
   return { inline_keyboard: rows };
 }
 
