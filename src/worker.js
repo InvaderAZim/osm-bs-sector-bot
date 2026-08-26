@@ -151,6 +151,14 @@ async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:
   });
 }
 
+async function sendWelcome(env, chatId) {
+  return tg(env, 'sendMessage', {
+    chat_id: chatId,
+    text: '🚀 DUGA готова до роботи.',
+    reply_markup: { inline_keyboard: [[{ text: 'START', callback_data: 'start_bot' }]] },
+  });
+}
+
 function htmlEscape(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -267,6 +275,10 @@ async function handleCallback(env, query, url) {
   const user = query.from;
   const chatId = query.message?.chat?.id || user.id;
   const data = query.data || '';
+  if (data === 'start_bot') {
+    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+    return sendMain(env, chatId, user.id, url);
+  }
   if (data === 'main:restart' || data === 'main:cancel') {
     await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
     if (data === 'main:cancel' && isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
@@ -343,7 +355,7 @@ async function processTelegramUpdate(env, update, url) {
 
   const text = String(msg.text || '').trim();
   if (text === '/start' || text.startsWith('/start ')) {
-    if (isAdmin(env, user.id) || row.status === 'approved') await sendMain(env, chatId, user.id, url);
+    if (isAdmin(env, user.id) || row.status === 'approved') await sendWelcome(env, chatId);
     else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Ваш номер уже збережено. Очікуйте дозволу адміністратора.' });
     return;
   }
