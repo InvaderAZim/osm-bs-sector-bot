@@ -191,12 +191,25 @@ async function tgDocument(env, chatId, filename, text, caption = '') {
   return data.result;
 }
 
-function contactKeyboard() {
+const START_BUTTON = 'START';
+const BACK_BUTTON = '⬅️ Назад';
+
+function navigationKeyboard(extraRows = []) {
   return {
-    keyboard: [[{ text: '📱 Надіслати свій контакт', request_contact: true }]],
+    keyboard: [
+      ...extraRows,
+      [{ text: START_BUTTON }],
+      [{ text: BACK_BUTTON }],
+    ],
     resize_keyboard: true,
-    one_time_keyboard: true,
+    is_persistent: true,
   };
+}
+
+function contactKeyboard() {
+  return navigationKeyboard([
+    [{ text: '📱 Надіслати свій контакт', request_contact: true }],
+  ]);
 }
 
 function mainKeyboard(env, userId, url) {
@@ -208,12 +221,13 @@ function mainKeyboard(env, userId, url) {
     rows.push([{ text: '📢 Повідомлення користувачам', callback_data: 'main:broadcast' }]);
   }
   rows.push([{ text: '🔄 Перезапустити бота', callback_data: 'main:restart' }]);
+  rows.push([{ text: BACK_BUTTON, callback_data: 'main:back' }]);
   rows.push([{ text: '❌ Скасувати', callback_data: 'main:cancel' }]);
   return { inline_keyboard: rows };
 }
 
 async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:', options = {}) {
-  await tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: { remove_keyboard: true } }, { preserve: options.preserveText });
+  await tg(env, 'sendMessage', { chat_id: chatId, text, reply_markup: navigationKeyboard() }, { preserve: options.preserveText });
   return tg(env, 'sendMessage', {
     chat_id: chatId,
     text: 'Меню DUGA:',
@@ -225,7 +239,7 @@ async function sendWelcome(env, chatId) {
   return tg(env, 'sendMessage', {
     chat_id: chatId,
     text: '🚀 DUGA готова до роботи.',
-    reply_markup: { inline_keyboard: [[{ text: 'START', callback_data: 'start_bot' }]] },
+    reply_markup: navigationKeyboard(),
   });
 }
 
@@ -237,10 +251,13 @@ async function notifyAdminsPending(env, row) {
   const name = [row.first_name, row.last_name].filter(Boolean).join(' ') || 'Без імені';
   const username = row.username ? `@${String(row.username).replace(/^@/, '')}` : 'не вказано';
   const text = `⏳ <b>Новий користувач очікує дозволу</b>\n\n<b>${htmlEscape(name)}</b>\nUsername: <code>${htmlEscape(username)}</code>\nТелефон: <code>${htmlEscape(row.phone || 'не надано')}</code>\nTelegram ID: <code>${row.user_id}</code>`;
-  const reply_markup = { inline_keyboard: [[
-    { text: '✅ Надати доступ', callback_data: `manage:restore:${row.user_id}` },
-    { text: '⛔ Заблокувати', callback_data: `manage:revoke:${row.user_id}` },
-  ]] };
+  const reply_markup = { inline_keyboard: [
+    [
+      { text: '✅ Надати доступ', callback_data: `manage:restore:${row.user_id}` },
+      { text: '⛔ Заблокувати', callback_data: `manage:revoke:${row.user_id}` },
+    ],
+    [{ text: BACK_BUTTON, callback_data: 'users:categories' }],
+  ] };
   for (const adminId of adminIds(env)) {
     try { await tg(env, 'sendMessage', { chat_id: adminId, text, parse_mode: 'HTML', reply_markup }, { preserve: true }); } catch (_) {}
   }
@@ -267,6 +284,7 @@ async function showUsersMenu(env, chatId) {
       [{ text: `✅ Надано доступ · ${c.approved}`, callback_data: 'users:list:approved' }],
       [{ text: `⛔ Заблоковані · ${c.blocked}`, callback_data: 'users:list:blocked' }],
       [{ text: '📋 Завантажити список користувачів', callback_data: 'users:export' }],
+      [{ text: BACK_BUTTON, callback_data: 'main:menu' }],
     ] },
   });
 }
@@ -277,7 +295,11 @@ async function showCategory(env, chatId, category) {
   if (category === 'pending') rows = await sql`SELECT * FROM users WHERE status='pending' AND COALESCE(phone,'')<>'' ORDER BY updated_at DESC LIMIT 100`;
   else rows = await sql`SELECT * FROM users WHERE status=${category} ORDER BY updated_at DESC LIMIT 100`;
   const label = category === 'pending' ? '⏳ Потребують дозволу' : category === 'approved' ? '✅ Користувачі з доступом' : '⛔ Заблоковані користувачі';
-  await tg(env, 'sendMessage', { chat_id: chatId, text: `${label}\nКількість: ${rows.length}` });
+  await tg(env, 'sendMessage', {
+    chat_id: chatId,
+    text: `${label}\nКількість: ${rows.length}`,
+    reply_markup: { inline_keyboard: [[{ text: BACK_BUTTON, callback_data: 'users:categories' }]] },
+  });
   if (!rows.length) return;
   for (const row of rows) {
     const name = [row.first_name, row.last_name].filter(Boolean).join(' ') || 'Без імені';
@@ -290,11 +312,12 @@ async function showCategory(env, chatId, category) {
       if (category === 'approved') buttons.push([{ text: '⛔ Скасувати доступ', callback_data: `manage:revoke:${row.user_id}` }]);
       if (category === 'blocked') buttons.push([{ text: '✅ Відновити доступ', callback_data: `manage:restore:${row.user_id}` }]);
     }
+    buttons.push([{ text: BACK_BUTTON, callback_data: 'users:categories' }]);
     await tg(env, 'sendMessage', {
       chat_id: chatId,
       text: `<b>${htmlEscape(name)}</b>\nUsername: <code>${htmlEscape(username)}</code>\nТелефон: <code>${htmlEscape(row.phone || 'не надано')}</code>\nTelegram ID: <code>${row.user_id}</code>\nСтатус: <b>${htmlEscape(role)}</b>`,
       parse_mode: 'HTML',
-      reply_markup: buttons.length ? { inline_keyboard: buttons } : undefined,
+      reply_markup: { inline_keyboard: buttons },
       disable_web_page_preview: true,
     });
   }
@@ -345,9 +368,14 @@ async function handleCallback(env, query, url) {
   const user = query.from;
   const chatId = query.message?.chat?.id || user.id;
   const data = query.data || '';
-  if (data === 'start_bot') {
+  if (data === 'start_bot' || data === 'main:menu') {
     await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
     return sendMain(env, chatId, user.id, url);
+  }
+  if (data === 'main:back') {
+    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+    if (isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
+    return sendWelcome(env, chatId);
   }
   if (data === 'main:restart' || data === 'main:cancel') {
     await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
@@ -364,7 +392,7 @@ async function handleCallback(env, query, url) {
     return tg(env, 'sendMessage', {
       chat_id: chatId,
       text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.',
-      reply_markup: { keyboard: [[{ text: '❌ Скасувати розсилку' }]], resize_keyboard: true, is_persistent: true },
+      reply_markup: navigationKeyboard([[{ text: '❌ Скасувати розсилку' }]]),
     });
   }
   if (data === 'users:categories') return showUsersMenu(env, chatId);
@@ -405,7 +433,7 @@ async function processTelegramMessage(env, msg, url) {
     if (isAdmin(env, user.id) || row.status === 'approved') {
       await sendMain(env, chatId, user.id, url, '✅ Номер телефону збережено.');
     } else {
-      await tg(env, 'sendMessage', { chat_id: chatId, text: '✅ Номер телефону збережено.\n⏳ Заявку передано адміністратору. Очікуйте надання доступу.', reply_markup: { remove_keyboard: true } });
+      await tg(env, 'sendMessage', { chat_id: chatId, text: '✅ Номер телефону збережено.\n⏳ Заявку передано адміністратору. Очікуйте надання доступу.', reply_markup: navigationKeyboard() });
       await notifyAdminsPending(env, row);
     }
     return;
@@ -423,7 +451,18 @@ async function processTelegramMessage(env, msg, url) {
   const text = String(msg.text || '').trim();
   if (text === '/start' || text.startsWith('/start ')) {
     if (isAdmin(env, user.id) || row.status === 'approved') await sendWelcome(env, chatId);
-    else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Ваш номер уже збережено. Очікуйте дозволу адміністратора.' });
+    else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Ваш номер уже збережено. Очікуйте дозволу адміністратора.', reply_markup: navigationKeyboard() });
+    return;
+  }
+  if (text.toUpperCase() === START_BUTTON) {
+    if (isAdmin(env, user.id) || row.status === 'approved') await sendMain(env, chatId, user.id, url);
+    else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Очікуйте дозволу адміністратора.', reply_markup: navigationKeyboard() });
+    return;
+  }
+  if (text === BACK_BUTTON) {
+    if (isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
+    if (isAdmin(env, user.id) || row.status === 'approved') await sendMain(env, chatId, user.id, url, 'Повернення до головного меню.');
+    else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Очікуйте дозволу адміністратора.', reply_markup: navigationKeyboard() });
     return;
   }
   if (text === '/help') {
@@ -438,7 +477,7 @@ async function processTelegramMessage(env, msg, url) {
   }
   if (isAdmin(env, user.id) && (text === '/broadcast' || text === '📢 Повідомлення користувачам')) {
     await setBroadcastState(env, user.id, true);
-    await tg(env, 'sendMessage', { chat_id: chatId, text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.', reply_markup: { keyboard: [[{ text: '❌ Скасувати розсилку' }]], resize_keyboard: true, is_persistent: true } });
+    await tg(env, 'sendMessage', { chat_id: chatId, text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.', reply_markup: navigationKeyboard([[{ text: '❌ Скасувати розсилку' }]]) });
     return;
   }
   if (isAdmin(env, user.id) && text === '❌ Скасувати розсилку') {
