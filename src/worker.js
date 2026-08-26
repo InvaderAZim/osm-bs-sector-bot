@@ -222,7 +222,6 @@ function mainKeyboard(env, userId, url) {
   }
   rows.push([{ text: '🔄 Перезапустити бота', callback_data: 'main:restart' }]);
   rows.push([{ text: BACK_BUTTON, callback_data: 'main:back' }]);
-  rows.push([{ text: '❌ Скасувати', callback_data: 'main:cancel' }]);
   return { inline_keyboard: rows };
 }
 
