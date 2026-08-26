@@ -57,10 +57,13 @@ jobs:
           node-version: "22"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Check Worker syntax
         run: npm run check
+
+      - name: Run Worker behavior tests
+        run: npm test
 
       - name: Bundle Worker with Wrangler
         run: npx wrangler deploy --dry-run

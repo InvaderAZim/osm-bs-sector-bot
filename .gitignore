@@ -6,5 +6,6 @@ __pycache__/
 .idea/
 .vscode/
 node_modules/
+.npm-cache/
 .wrangler/
 .dev.vars
