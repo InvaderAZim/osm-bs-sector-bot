@@ -1,12 +1,20 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker, {
   authorizedAppHtml,
+  backRow,
+  callbackBackTarget,
+  callbackRequiresAdmin,
+  mainKeyboard,
   navigationKeyboard,
   shouldDeleteIncomingMessage,
   telegramInitDataFromUrl,
   verifyTelegramInitData,
 } from '../src/worker.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 async function invoke(request, env = {}) {
   const ctx = createExecutionContext();
@@ -30,10 +38,36 @@ async function signedInitData(botToken, user, authDate = Math.floor(Date.now() /
 }
 
 describe('Telegram webhook security', () => {
-  it('keeps only START in the persistent navigation row', () => {
+  it('removes the bottom keyboard when no contextual buttons are needed', () => {
     const keyboard = navigationKeyboard();
-    expect(keyboard.is_persistent).toBe(true);
-    expect(keyboard.keyboard).toEqual([[{ text: 'START' }]]);
+    expect(keyboard).toEqual({ remove_keyboard: true });
+  });
+
+  it('does not append START to contextual bottom buttons', () => {
+    const rows = [[{ text: '📱 Надіслати свій контакт', request_contact: true }]];
+    const keyboard = navigationKeyboard(rows);
+    expect(keyboard.keyboard).toEqual(rows);
+    expect(keyboard.keyboard.flat().some(button => button.text === 'START')).toBe(false);
+  });
+
+  it('keeps Back in submenus but not in the main menu', () => {
+    expect(backRow('users:categories')).toEqual([{
+      text: '⬅️ Назад',
+      callback_data: 'users:categories',
+    }]);
+    const buttons = mainKeyboard({ ADMIN_TELEGRAM_USER_IDS: '20' }, 20, 'https://example.test')
+      .inline_keyboard
+      .flat();
+    expect(buttons.some(button => button.text === '⬅️ Назад')).toBe(false);
+    expect(buttons.some(button => button.callback_data === 'users:categories')).toBe(true);
+  });
+
+  it('returns failed submenu actions to the nearest usable menu', () => {
+    expect(callbackBackTarget('users:categories')).toBe('main:menu');
+    expect(callbackBackTarget('users:list:approved')).toBe('users:categories');
+    expect(callbackBackTarget('manage:revoke:123')).toBe('users:categories');
+    expect(callbackBackTarget('users:export')).toBe('users:categories');
+    expect(callbackBackTarget('main:broadcast')).toBe('main:menu');
   });
 
   it('fails closed when the webhook secret is missing', async () => {
@@ -85,6 +119,109 @@ describe('Telegram webhook security', () => {
     expect(shouldDeleteIncomingMessage({}, ordinary, true)).toBe(true);
     expect(shouldDeleteIncomingMessage({ ADMIN_TELEGRAM_USER_IDS: '20' }, admin, true)).toBe(false);
     expect(shouldDeleteIncomingMessage({}, group, true)).toBe(false);
+  });
+
+  it('restricts user-management callbacks to administrators', () => {
+    expect(callbackRequiresAdmin('users:categories')).toBe(true);
+    expect(callbackRequiresAdmin('manage:restore:123')).toBe(true);
+    expect(callbackRequiresAdmin('main:broadcast')).toBe(true);
+    expect(callbackRequiresAdmin('main:restart')).toBe(false);
+  });
+
+  it('does not fail the webhook when Telegram rejects a stale page callback', async () => {
+    const telegramFetch = vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', telegramFetch);
+
+    const response = await invoke(new Request('https://example.test/telegram-webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Bot-Api-Secret-Token': 'secret',
+      },
+      body: JSON.stringify({
+        update_id: 1,
+        callback_query: {
+          id: 'stale-callback',
+          from: { id: 20, first_name: 'Admin' },
+          message: {
+            message_id: 5,
+            chat: { id: 20, type: 'private' },
+          },
+          data: 'users:noop',
+        },
+      }),
+    }), {
+      ADMIN_TELEGRAM_USER_IDS: '20',
+      TELEGRAM_BOT_TOKEN: '123456:TEST_TOKEN',
+      TELEGRAM_WEBHOOK_SECRET: 'secret',
+    });
+
+    expect(response.status).toBe(200);
+    expect(telegramFetch).toHaveBeenCalledTimes(1);
+    expect(telegramFetch.mock.calls[0][0]).toContain('/answerCallbackQuery');
+  });
+
+  it('continues the callback action when Telegram cannot acknowledge it', async () => {
+    let messageId = 10;
+    const telegramFetch = vi.fn(async url => {
+      if (String(url).includes('/answerCallbackQuery')) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error_code: 400,
+          description: 'Bad Request: query is too old',
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      messageId += 1;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: { message_id: messageId },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', telegramFetch);
+
+    const response = await invoke(new Request('https://example.test/telegram-webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Bot-Api-Secret-Token': 'secret',
+      },
+      body: JSON.stringify({
+        update_id: 2,
+        callback_query: {
+          id: 'stale-restart-callback',
+          from: { id: 30, first_name: 'User' },
+          message: {
+            message_id: 10,
+            chat: { id: 30, type: 'private' },
+          },
+          data: 'main:restart',
+        },
+      }),
+    }), {
+      TELEGRAM_BOT_TOKEN: '123456:TEST_TOKEN',
+      TELEGRAM_WEBHOOK_SECRET: 'secret',
+    });
+
+    expect(response.status).toBe(200);
+    expect(telegramFetch).toHaveBeenCalledTimes(3);
+    expect(telegramFetch.mock.calls.map(call => String(call[0]))).toEqual([
+      expect.stringContaining('/answerCallbackQuery'),
+      expect.stringContaining('/sendMessage'),
+      expect.stringContaining('/sendMessage'),
+    ]);
   });
 });
 

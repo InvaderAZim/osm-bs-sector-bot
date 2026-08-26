@@ -197,19 +197,45 @@ async function safeDeleteMessage(env, chatId, messageId) {
   }
 }
 
-async function cleanupTemporaryBotMessages(env, chatId) {
+async function safeAnswerCallbackQuery(env, callbackQueryId, options = {}) {
+  if (!callbackQueryId) return false;
+  try {
+    await tg(env, 'answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      ...options,
+    }, { preserve: true });
+    return true;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: 'Telegram callback acknowledgement skipped',
+      error: cleanupError(error),
+    }));
+    return false;
+  }
+}
+
+async function cleanupTemporaryBotMessages(env, chatId, maxMessageId = null) {
   const numericChatId = Number(chatId);
   if (!Number.isSafeInteger(numericChatId)) return;
+  const numericMaxMessageId = Number(maxMessageId);
+  const hasUpperBound = maxMessageId !== null && Number.isSafeInteger(numericMaxMessageId);
   try {
     const sql = sqlClient(env);
     await sql`DELETE FROM temporary_bot_messages
       WHERE chat_id=${numericChatId}
         AND created_at < NOW() - INTERVAL '48 hours'`;
-    const rows = await sql`SELECT message_id FROM temporary_bot_messages
-      WHERE chat_id=${numericChatId}
-        AND created_at >= NOW() - INTERVAL '48 hours'
-      ORDER BY message_id
-      LIMIT 100`;
+    const rows = hasUpperBound
+      ? await sql`SELECT message_id FROM temporary_bot_messages
+          WHERE chat_id=${numericChatId}
+            AND message_id <= ${numericMaxMessageId}
+            AND created_at >= NOW() - INTERVAL '48 hours'
+          ORDER BY message_id
+          LIMIT 100`
+      : await sql`SELECT message_id FROM temporary_bot_messages
+          WHERE chat_id=${numericChatId}
+            AND created_at >= NOW() - INTERVAL '48 hours'
+          ORDER BY message_id
+          LIMIT 100`;
     const messageIds = rows.map(row => Number(row.message_id)).filter(Number.isSafeInteger);
     if (!messageIds.length) return;
     if (messageIds.length === 1) {
@@ -254,11 +280,9 @@ const START_BUTTON = 'START';
 const BACK_BUTTON = '⬅️ Назад';
 
 export function navigationKeyboard(extraRows = []) {
+  if (!extraRows.length) return { remove_keyboard: true };
   return {
-    keyboard: [
-      ...extraRows,
-      [{ text: START_BUTTON }],
-    ],
+    keyboard: extraRows,
     resize_keyboard: true,
     is_persistent: true,
   };
@@ -270,7 +294,11 @@ function contactKeyboard() {
   ]);
 }
 
-function mainKeyboard(env, userId, url) {
+export function backRow(callbackData) {
+  return [{ text: BACK_BUTTON, callback_data: callbackData }];
+}
+
+export function mainKeyboard(env, userId, url) {
   const rows = [
     [{ text: '🚀 Запустити DUGA', web_app: { url: `${url}/app` } }],
   ];
@@ -291,14 +319,6 @@ async function sendMain(env, chatId, userId, url, text = 'Оберіть дію:
   });
 }
 
-async function sendWelcome(env, chatId) {
-  return tg(env, 'sendMessage', {
-    chat_id: chatId,
-    text: '🚀 DUGA готова до роботи.',
-    reply_markup: navigationKeyboard(),
-  });
-}
-
 function htmlEscape(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -312,7 +332,7 @@ async function notifyAdminsPending(env, row) {
       { text: '✅ Надати доступ', callback_data: `manage:restore:${row.user_id}` },
       { text: '⛔ Заблокувати', callback_data: `manage:revoke:${row.user_id}` },
     ],
-    [{ text: BACK_BUTTON, callback_data: 'users:categories' }],
+    backRow('users:categories'),
   ] };
   for (const adminId of adminIds(env)) {
     try {
@@ -343,7 +363,7 @@ async function resolveAdminNotifications(env, userId) {
       await tg(env, 'editMessageReplyMarkup', {
         chat_id: chatId,
         message_id: messageId,
-        reply_markup: { inline_keyboard: [[{ text: BACK_BUTTON, callback_data: 'users:categories' }]] },
+        reply_markup: { inline_keyboard: [backRow('users:categories')] },
       }, { preserve: true });
       await sql`UPDATE admin_notifications SET active=FALSE
         WHERE user_id=${Number(userId)} AND admin_chat_id=${chatId} AND message_id=${messageId}`;
@@ -380,7 +400,7 @@ async function showUsersMenu(env, chatId) {
       [{ text: `✅ Надано доступ · ${c.approved}`, callback_data: 'users:list:approved' }],
       [{ text: `⛔ Заблоковані · ${c.blocked}`, callback_data: 'users:list:blocked' }],
       [{ text: '📋 Завантажити список користувачів', callback_data: 'users:export' }],
-      [{ text: BACK_BUTTON, callback_data: 'main:menu' }],
+      backRow('main:menu'),
     ] },
   });
 }
@@ -430,7 +450,7 @@ async function showCategory(env, chatId, category, requestedPage = 0) {
   pages.push({ text: `${page + 1}/${lastPage + 1}`, callback_data: 'users:noop' });
   if (page < lastPage) pages.push({ text: '➡️', callback_data: `users:list:${category}:${page + 1}` });
   buttons.push(pages);
-  buttons.push([{ text: BACK_BUTTON, callback_data: 'users:categories' }]);
+  buttons.push(backRow('users:categories'));
   return tg(env, 'sendMessage', {
     chat_id: chatId,
     text: `<b>${config.label}</b>\nКількість: ${total}\n\n${cards.join('\n\n') || 'Список порожній.'}`,
@@ -466,6 +486,20 @@ async function getBroadcastState(env, userId) {
   const sql = sqlClient(env);
   const rows = await sql`SELECT awaiting_broadcast FROM admin_state WHERE user_id=${Number(userId)}`;
   return Boolean(rows[0]?.awaiting_broadcast);
+}
+
+async function safeSetBroadcastState(env, userId, value) {
+  try {
+    await setBroadcastState(env, userId, value);
+    return true;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: 'Failed to update Telegram broadcast navigation state',
+      user_id: Number(userId),
+      error: cleanupError(error),
+    }));
+    return false;
+  }
 }
 
 const BROADCAST_FANOUT_SIZE = 50;
@@ -630,30 +664,24 @@ async function handleCallback(env, query, url) {
   const chatId = query.message?.chat?.id || user.id;
   const data = query.data || '';
   if (data === 'start_bot' || data === 'main:menu') {
-    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+    if (data === 'main:menu' && isAdmin(env, user.id)) await safeSetBroadcastState(env, user.id, false);
     return sendMain(env, chatId, user.id, url);
   }
   if (data === 'main:back') {
-    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
-    if (isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
-    return sendWelcome(env, chatId);
+    if (isAdmin(env, user.id)) await safeSetBroadcastState(env, user.id, false);
+    return sendMain(env, chatId, user.id, url);
   }
   if (data === 'main:restart' || data === 'main:cancel') {
-    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
-    if (data === 'main:cancel' && isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
+    if (data === 'main:cancel' && isAdmin(env, user.id)) await safeSetBroadcastState(env, user.id, false);
     return sendMain(env, chatId, user.id, url, data === 'main:cancel' ? 'Дію скасовано.' : 'Бота перезапущено.');
   }
-  if (!isAdmin(env, user.id)) {
-    await tg(env, 'answerCallbackQuery', { callback_query_id: query.id, text: 'Недостатньо прав', show_alert: true });
-    return;
-  }
-  await tg(env, 'answerCallbackQuery', { callback_query_id: query.id });
+  if (!isAdmin(env, user.id)) return;
   if (data === 'main:broadcast') {
     await setBroadcastState(env, user.id, true);
     return tg(env, 'sendMessage', {
       chat_id: chatId,
-      text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.',
-      reply_markup: navigationKeyboard([[{ text: '❌ Скасувати розсилку' }]]),
+      text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля повернення натисніть кнопку нижче.',
+      reply_markup: { inline_keyboard: [backRow('main:menu')] },
     });
   }
   if (data === 'users:categories') return showUsersMenu(env, chatId);
@@ -662,7 +690,10 @@ async function handleCallback(env, query, url) {
     const [, , category, page = '0'] = data.split(':');
     return showCategory(env, chatId, category, Number(page));
   }
-  if (data === 'users:export') return exportUsers(env, chatId);
+  if (data === 'users:export') {
+    await exportUsers(env, chatId);
+    return showUsersMenu(env, chatId);
+  }
   if (data.startsWith('manage:restore:')) {
     const id = Number(data.split(':').at(-1));
     if (!Number.isSafeInteger(id) || isAdmin(env, id)) return;
@@ -670,7 +701,7 @@ async function handleCallback(env, query, url) {
     await resolveAdminNotifications(env, id);
     await tg(env, 'sendMessage', { chat_id: chatId, text: `✅ Доступ користувачу ${id} надано.` }, { preserve: true });
     try { await sendMain(env, id, id, url, '✅ Адміністратор надав вам доступ до DUGA.', { preserveText: true }); } catch (_) {}
-    return;
+    return showUsersMenu(env, chatId);
   }
   if (data.startsWith('manage:revoke:')) {
     const id = Number(data.split(':').at(-1));
@@ -679,6 +710,7 @@ async function handleCallback(env, query, url) {
     await resolveAdminNotifications(env, id);
     await tg(env, 'sendMessage', { chat_id: chatId, text: `⛔ Доступ користувачу ${id} скасовано.` }, { preserve: true });
     try { await tg(env, 'sendMessage', { chat_id: id, text: '⛔ Ваш доступ до DUGA скасовано адміністратором.' }, { preserve: true }); } catch (_) {}
+    return showUsersMenu(env, chatId);
   }
 }
 
@@ -719,7 +751,9 @@ async function processTelegramMessage(env, msg, url) {
 
   const text = String(msg.text || '').trim();
   if (text === '/start' || text.startsWith('/start ')) {
-    if (isAdmin(env, user.id) || row.status === 'approved') await sendWelcome(env, chatId);
+    if (isAdmin(env, user.id) || row.status === 'approved') {
+      await sendMain(env, chatId, user.id, url, '🚀 DUGA готова до роботи.');
+    }
     else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Ваш номер уже збережено. Очікуйте дозволу адміністратора.', reply_markup: navigationKeyboard() });
     return;
   }
@@ -729,35 +763,47 @@ async function processTelegramMessage(env, msg, url) {
     return;
   }
   if (text === BACK_BUTTON) {
-    if (isAdmin(env, user.id)) await setBroadcastState(env, user.id, false);
+    if (isAdmin(env, user.id)) await safeSetBroadcastState(env, user.id, false);
     if (isAdmin(env, user.id) || row.status === 'approved') await sendMain(env, chatId, user.id, url, 'Повернення до головного меню.');
     else await tg(env, 'sendMessage', { chat_id: chatId, text: '⏳ Очікуйте дозволу адміністратора.', reply_markup: navigationKeyboard() });
     return;
   }
   if (text === '/help') {
-    await tg(env, 'sendMessage', { chat_id: chatId, text: '📡 DUGA\n\n1. Запустіть Mini App.\n2. Оберіть до 3 точок.\n3. Для кожної задайте азимут і радіус.\n4. За потреби увімкніть спільний полігон або повноекранний режим.' });
+    await tg(env, 'sendMessage', {
+      chat_id: chatId,
+      text: '📡 DUGA\n\n1. Запустіть Mini App.\n2. Оберіть до 3 точок.\n3. Для кожної задайте азимут і радіус.\n4. За потреби увімкніть спільний полігон або повноекранний режим.',
+      reply_markup: { inline_keyboard: [backRow('main:menu')] },
+    });
     return;
   }
   if (text === '/status' && isAdmin(env, user.id)) {
     let db = '✅ PostgreSQL: працює';
     try { const sql = sqlClient(env); await sql`SELECT 1`; } catch (_) { db = '❌ PostgreSQL: помилка'; }
-    await tg(env, 'sendMessage', { chat_id: chatId, text: `🩺 Стан DUGA\n\n✅ Cloudflare Worker: працює\n${db}\n✅ Telegram: webhook отримано\n🕒 ${new Date().toISOString()}` });
+    await tg(env, 'sendMessage', {
+      chat_id: chatId,
+      text: `🩺 Стан DUGA\n\n✅ Cloudflare Worker: працює\n${db}\n✅ Telegram: webhook отримано\n🕒 ${new Date().toISOString()}`,
+      reply_markup: { inline_keyboard: [backRow('main:menu')] },
+    });
     return;
   }
   if (isAdmin(env, user.id) && (text === '/broadcast' || text === '📢 Повідомлення користувачам')) {
     await setBroadcastState(env, user.id, true);
-    await tg(env, 'sendMessage', { chat_id: chatId, text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля скасування натисніть кнопку нижче.', reply_markup: navigationKeyboard([[{ text: '❌ Скасувати розсилку' }]]) });
+    await tg(env, 'sendMessage', {
+      chat_id: chatId,
+      text: '✍️ Надішліть наступним повідомленням текст розсилки.\nДля повернення натисніть кнопку нижче.',
+      reply_markup: { inline_keyboard: [backRow('main:menu')] },
+    });
     return;
   }
   if (isAdmin(env, user.id) && text === '❌ Скасувати розсилку') {
-    await setBroadcastState(env, user.id, false);
+    await safeSetBroadcastState(env, user.id, false);
     await sendMain(env, chatId, user.id, url, 'Розсилку скасовано.');
     return;
   }
   if (isAdmin(env, user.id) && await getBroadcastState(env, user.id)) {
     await setBroadcastState(env, user.id, false);
-    if (text) await runBroadcast(env, chatId, text, url);
-    return;
+    if (text) return runBroadcast(env, chatId, text, url);
+    return sendMain(env, chatId, user.id, url, 'Розсилку скасовано: текст повідомлення не отримано.');
   }
   if (isAdmin(env, user.id) && text === '👥 Користувачі') return showUsersMenu(env, chatId);
   if (text === '🔄 Перезапустити бота' || text === '❌ Скасувати') {
@@ -781,42 +827,95 @@ export function shouldDeleteIncomingMessage(env, msg, processed) {
   );
 }
 
-async function processTelegramUpdate(env, update, url) {
+export function callbackRequiresAdmin(data) {
+  return ![
+    'start_bot',
+    'main:menu',
+    'main:back',
+    'main:restart',
+    'main:cancel',
+  ].includes(String(data || ''));
+}
+
+export function callbackBackTarget(data) {
+  const value = String(data || '');
+  if (value.startsWith('users:list:')
+    || value.startsWith('manage:')
+    || value === 'users:export') return 'users:categories';
+  return 'main:menu';
+}
+
+async function processTelegramUpdate(env, update, url, ctx) {
   if (update.callback_query) {
     const query = update.callback_query;
     const user = query.from;
     const chat = query.message?.chat;
     if (!user) return;
     if (chat && chat.type !== 'private') {
-      try {
-        await tg(env, 'answerCallbackQuery', {
-          callback_query_id: query.id,
-          text: 'Відкрийте DUGA у приватному чаті з ботом.',
-          show_alert: true,
-        }, { preserve: true });
-      } catch (error) {
-        console.warn('Failed to answer a non-private callback', cleanupError(error));
-      }
+      await safeAnswerCallbackQuery(env, query.id, {
+        text: 'Відкрийте DUGA у приватному чаті з ботом.',
+        show_alert: true,
+      });
       return;
     }
     const chatId = chat?.id || user.id;
-    await cleanupTemporaryBotMessages(env, chatId);
-    return handleCallback(env, query, url);
+    const data = String(query.data || '');
+    if (callbackRequiresAdmin(data) && !isAdmin(env, user.id)) {
+      await safeAnswerCallbackQuery(env, query.id, {
+        text: 'Недостатньо прав',
+        show_alert: true,
+      });
+      return;
+    }
+    await safeAnswerCallbackQuery(env, query.id);
+    if (data === 'users:noop') return;
+    let result;
+    try {
+      result = await handleCallback(env, query, url);
+    } catch (error) {
+      console.error(JSON.stringify({
+        message: 'Telegram menu action failed',
+        callback_data: data,
+        error: cleanupError(error),
+      }));
+      try {
+        await tg(env, 'sendMessage', {
+          chat_id: chatId,
+          text: '⚠️ Не вдалося відкрити цей пункт меню. Спробуйте ще раз або поверніться назад.',
+          reply_markup: { inline_keyboard: [backRow(callbackBackTarget(data))] },
+        });
+      } catch (notificationError) {
+        console.warn(JSON.stringify({
+          message: 'Failed to send Telegram menu recovery message',
+          error: cleanupError(notificationError),
+        }));
+      }
+      return;
+    }
+    const sourceMessageId = Number(query.message?.message_id);
+    if (result && Number.isSafeInteger(sourceMessageId)) {
+      ctx.waitUntil(cleanupTemporaryBotMessages(env, chatId, sourceMessageId));
+    }
+    return result;
   }
   const msg = update.message || update.edited_message;
   if (!msg?.from || !msg.chat) return;
   if (msg.chat.type !== 'private') return;
-  await cleanupTemporaryBotMessages(env, msg.chat.id);
   let processed = false;
+  let result;
   try {
-    const result = await processTelegramMessage(env, msg, url);
+    result = await processTelegramMessage(env, msg, url);
     processed = true;
-    return result;
   } finally {
     if (shouldDeleteIncomingMessage(env, msg, processed)) {
       await safeDeleteMessage(env, msg.chat.id, msg.message_id);
     }
   }
+  const sourceMessageId = Number(msg.message_id);
+  if (processed && Number.isSafeInteger(sourceMessageId)) {
+    ctx.waitUntil(cleanupTemporaryBotMessages(env, msg.chat.id, sourceMessageId));
+  }
+  return result;
 }
 
 function toHex(bytes) {
@@ -1030,7 +1129,7 @@ export default {
         const contentLength = Number(request.headers.get('Content-Length') || 0);
         if (contentLength > 1024 * 1024) return json({ ok:false }, 413);
         const update = await request.json();
-        await processTelegramUpdate(env, update, baseUrl(env, request));
+        await processTelegramUpdate(env, update, baseUrl(env, request), ctx);
         return json({ ok:true });
       }
       return json({ detail:'Not found' }, 404);
