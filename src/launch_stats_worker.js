@@ -132,12 +132,9 @@ async function snapshot(env, rawDays) {
 
 function statsText(s) {
   const requestUsers = s.requestUsers.length
-    ? s.requestUsers.map((row, i) => {
-        const role = isAdmin({ ADMIN_TELEGRAM_USER_IDS: '' }, row.user_id) ? ' · 🛡' : '';
-        return `${i + 1}. <b>${esc(userName(row))}</b>${role}\n` +
-          `   ${esc(username(row))} · 📱 <code>${esc(row.phone || '—')}</code>\n` +
-          `   🆔 <code>${esc(row.user_id)}</code> · 🔎 ${Number(row.requests || 0)} · 🕒 ${esc(kyivDateTime(row.last_request))}`;
-      }).join('\n')
+    ? s.requestUsers.map((row, i) => `${i + 1}. <b>${esc(userName(row))}</b>\n` +
+        `   ${esc(username(row))} · 📱 <code>${esc(row.phone || '—')}</code>\n` +
+        `   🆔 <code>${esc(row.user_id)}</code> · 🔎 ${Number(row.requests || 0)} · 🕒 ${esc(kyivDateTime(row.last_request))}`).join('\n')
     : 'Ще немає користувачів із запитами.';
 
   const launchUsers = s.launchUsers.length
