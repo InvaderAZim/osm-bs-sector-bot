@@ -2,34 +2,115 @@
 <html lang="uk">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#080b0f">
+<meta name="color-scheme" content="dark">
 <title>DUGA</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-:root{--bg:#0f1117;--panel:#171a22;--card:#20242e;--text:#f4f6fb;--muted:#aeb5c4;--line:#343a46;--accent:#ef4444}
-*{box-sizing:border-box}html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}body{display:flex;flex-direction:column;overflow:hidden}.top{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--line);display:grid;gap:8px}.title{display:flex;justify-content:space-between;align-items:center}.title b{font-size:18px}.title span{font-size:12px;color:var(--muted)}.search{display:flex;gap:7px}.search input{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:11px 12px;font-size:15px}.search button,.btn{border:0;border-radius:10px;padding:10px 13px;font-weight:700;background:var(--accent);color:#fff}#results{display:none;max-height:160px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}.result{padding:10px;border-bottom:1px solid var(--line);font-size:13px}.result:last-child{border-bottom:0}.result small{display:block;color:var(--muted);margin-top:3px}#map{flex:1;min-height:220px}.controls{padding:10px 12px;background:var(--panel);border-top:1px solid var(--line);display:grid;gap:9px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.field{display:grid;gap:5px}.field label{font-size:12px;color:var(--muted)}.field input{width:100%;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:10px;font-size:16px}.point-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.point-tabs button,.radii button,.common-polygon-btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:9px;padding:9px 4px;font-weight:800}.point-tabs button.active{outline:2px solid #fff}.point-tabs button[data-i="0"].active{background:#b91c1c}.point-tabs button[data-i="1"].active{background:#1d4ed8}.point-tabs button[data-i="2"].active{background:#15803d}.point-tabs button.filled::after{content:' •';color:#fff}.radii{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.radii button.active{background:var(--accent);border-color:var(--accent);color:#fff}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.secondary{background:var(--card);border:1px solid var(--line);color:var(--text)}.status{font-size:12px;color:var(--muted);min-height:16px}.sector-canvas{position:absolute;pointer-events:none}.point-icon{width:28px;height:28px;border-radius:50%;border:3px solid #fff;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 1px 8px rgba(0,0,0,.55)}.common-polygon-btn{width:100%}.common-polygon-btn.active{background:#a16207;border-color:#facc15;color:#fff}.fullscreen-btn{position:absolute;z-index:1000;right:10px;top:10px;border:1px solid rgba(255,255,255,.25);background:rgba(23,26,34,.92);color:#fff;border-radius:10px;padding:9px 11px;font-weight:800;box-shadow:0 2px 10px rgba(0,0,0,.35)}body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}body.duga-fullscreen #map{height:100vh;min-height:100vh}body.duga-fullscreen .fullscreen-btn{position:fixed;top:auto;right:12px;bottom:max(16px,calc(env(safe-area-inset-bottom,0px) + 16px))}
+:root{
+  color-scheme:dark;
+  --bg:#080b0f;
+  --panel:#0d1218;
+  --panel-2:#101720;
+  --card:#131c26;
+  --card-2:#17222e;
+  --text:#e8f0f8;
+  --muted:#7f8b99;
+  --line:#26313d;
+  --line-strong:#3b4958;
+  --accent:#67e8f9;
+  --accent-2:#22d3ee;
+  --accent-dim:rgba(103,232,249,.11);
+  --danger:#ef4444;
+  --shadow:0 12px 30px rgba(0,0,0,.28);
+  --font-ui:'Rajdhani','Bahnschrift Condensed','Arial Narrow',sans-serif;
+  --font-mono:'IBM Plex Mono','Roboto Mono','Cascadia Code','SFMono-Regular',Consolas,monospace;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--font-ui);overscroll-behavior:none}
+body{display:flex;flex-direction:column;overflow:hidden;background:radial-gradient(circle at 50% -20%,rgba(34,211,238,.07),transparent 34%),var(--bg)}
+button,input{font:inherit}
+button{cursor:pointer;touch-action:manipulation}
+.top{position:relative;padding:max(10px,env(safe-area-inset-top)) 12px 10px;background:linear-gradient(180deg,#0f151d 0%,var(--panel) 100%);border-bottom:1px solid var(--line);display:grid;gap:9px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:500}
+.top::after{content:'';position:absolute;left:12px;right:12px;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.36}
+.title{display:flex;justify-content:space-between;align-items:center;min-height:25px}
+.brand{display:flex;align-items:baseline;gap:9px}
+.title b{font-family:var(--font-ui);font-size:22px;line-height:1;letter-spacing:.15em;font-weight:700;color:#f5fbff;text-shadow:0 0 18px rgba(103,232,249,.12)}
+.title .system-tag{font-family:var(--font-mono);font-size:9px;letter-spacing:.12em;color:var(--accent);border:1px solid rgba(103,232,249,.25);background:var(--accent-dim);padding:3px 5px;border-radius:4px}
+.title .mode{font-family:var(--font-mono);font-size:9px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+.search{display:flex;gap:7px;position:relative}
+.search input,.field input{outline:none;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
+.search input{flex:1;min-width:0;border:1px solid var(--line);background:#0a0f15;color:var(--text);border-radius:7px;padding:11px 12px;font-family:var(--font-mono);font-size:13px;letter-spacing:.01em}
+.search input::placeholder{color:#596675}
+.search input:focus,.field input:focus{border-color:rgba(103,232,249,.66);box-shadow:0 0 0 2px rgba(103,232,249,.08);background:#0c1219}
+.search button,.btn{min-height:42px;border:1px solid transparent;border-radius:7px;padding:9px 13px;font-family:var(--font-ui);font-size:15px;letter-spacing:.06em;font-weight:700;text-transform:uppercase;background:linear-gradient(180deg,#8cf1fb 0%,var(--accent-2) 100%);color:#04242b;box-shadow:0 5px 18px rgba(34,211,238,.13);transition:transform .12s ease,filter .12s ease,border-color .12s ease}
+.search button:active,.btn:active,.point-tabs button:active,.radii button:active,.common-polygon-btn:active,.fullscreen-btn:active{transform:translateY(1px);filter:brightness(.92)}
+#results{display:none;max-height:180px;overflow:auto;background:rgba(13,18,24,.98);border:1px solid var(--line-strong);border-radius:7px;box-shadow:var(--shadow);scrollbar-width:thin;scrollbar-color:var(--line-strong) var(--panel)}
+.result{padding:10px 11px;border-bottom:1px solid var(--line);font-family:var(--font-mono);font-size:11px;line-height:1.45;cursor:pointer}
+.result:hover{background:var(--card-2)}
+.result:last-child{border-bottom:0}.result small{display:block;color:var(--muted);margin-top:4px;font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+#map{flex:1;min-height:220px;background:#090d12;isolation:isolate}
+#map::after{content:'';position:absolute;inset:0;z-index:400;pointer-events:none;background:linear-gradient(rgba(103,232,249,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(103,232,249,.025) 1px,transparent 1px);background-size:32px 32px;mix-blend-mode:screen}
+.controls{position:relative;padding:10px 12px max(10px,env(safe-area-inset-bottom));background:linear-gradient(180deg,var(--panel) 0%,#0b1016 100%);border-top:1px solid var(--line);display:grid;gap:9px;box-shadow:0 -10px 28px rgba(0,0,0,.2);z-index:500}
+.controls::before{content:'';position:absolute;left:12px;right:12px;top:-1px;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.26}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.field{display:grid;gap:5px;min-width:0}
+.field label{font-family:var(--font-mono);font-size:9px;line-height:1.35;letter-spacing:.07em;color:var(--muted);text-transform:uppercase}
+.field input{width:100%;min-width:0;border:1px solid var(--line);background:#0a0f15;color:var(--text);border-radius:7px;padding:10px;font-family:var(--font-mono);font-size:13px;font-weight:600}
+.field input[readonly]{color:#9eafbf}
+.point-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.point-tabs button,.radii button,.common-polygon-btn{min-height:39px;border:1px solid var(--line);background:linear-gradient(180deg,var(--card-2),var(--card));color:#cbd6df;border-radius:6px;padding:8px 4px;font-family:var(--font-ui);font-size:14px;letter-spacing:.04em;font-weight:700;text-transform:uppercase;transition:border-color .15s ease,background .15s ease,box-shadow .15s ease,transform .12s ease}
+.point-tabs button.active{border-color:#d7e2ec;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 0 16px rgba(255,255,255,.05);color:#fff}
+.point-tabs button[data-i="0"].active{background:linear-gradient(180deg,#7f1d1d,#5f1717);border-color:#ef4444}
+.point-tabs button[data-i="1"].active{background:linear-gradient(180deg,#1e40af,#173481);border-color:#3b82f6}
+.point-tabs button[data-i="2"].active{background:linear-gradient(180deg,#166534,#114c28);border-color:#22c55e}
+.point-tabs button.filled::after{content:' ●';font-size:8px;color:var(--accent)}
+.radii{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.radii button{font-family:var(--font-mono);font-size:11px;letter-spacing:.03em}
+.radii button.active{background:var(--accent-dim);border-color:rgba(103,232,249,.65);color:var(--accent);box-shadow:inset 0 0 14px rgba(103,232,249,.05)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.secondary{background:linear-gradient(180deg,var(--card-2),var(--card));border:1px solid var(--line-strong);color:#c6d0da;box-shadow:none}
+.status{position:relative;min-height:18px;padding-left:14px;font-family:var(--font-mono);font-size:9.5px;line-height:1.5;letter-spacing:.025em;color:#8d9aa8}
+.status::before{content:'■';position:absolute;left:0;top:0;color:var(--accent);font-size:7px;line-height:16px;text-shadow:0 0 8px rgba(103,232,249,.5)}
+.sector-canvas{position:absolute;pointer-events:none}.point-icon{width:28px;height:28px;border-radius:4px;border:2px solid rgba(255,255,255,.92);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:12px;font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.58),inset 0 0 0 1px rgba(0,0,0,.26);transform:rotate(45deg)}.point-icon>span{transform:rotate(-45deg)}
+.common-polygon-btn{width:100%;font-family:var(--font-mono);font-size:11px;letter-spacing:.07em}.common-polygon-btn.active{background:rgba(250,204,21,.1);border-color:#facc15;color:#fde047;box-shadow:inset 0 0 18px rgba(250,204,21,.04)}
+.fullscreen-btn{position:absolute;z-index:1000;right:10px;top:10px;min-height:38px;border:1px solid rgba(103,232,249,.3);background:rgba(8,11,15,.9);backdrop-filter:blur(8px);color:#c7f7fb;border-radius:6px;padding:8px 10px;font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;box-shadow:0 5px 18px rgba(0,0,0,.35)}
+.leaflet-control-zoom a{background:#0b1016!important;color:#d8e5ee!important;border-color:#26313d!important;font-family:var(--font-mono)!important}.leaflet-control-zoom a:hover{background:#131c26!important;color:var(--accent)!important}.leaflet-control-attribution{background:rgba(8,11,15,.78)!important;color:#6f7d8b!important;font-family:var(--font-mono)!important;font-size:8px!important}.leaflet-control-attribution a{color:#8ea7b5!important}.leaflet-bar{border:1px solid #26313d!important;box-shadow:0 4px 16px rgba(0,0,0,.3)!important}.leaflet-container{font-family:var(--font-mono)}
+body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}body.duga-fullscreen #map{height:100vh;min-height:100vh}body.duga-fullscreen .fullscreen-btn{position:fixed;top:auto;right:12px;bottom:max(16px,calc(env(safe-area-inset-bottom,0px) + 16px))}
+@media(max-height:690px){.top{padding-top:max(7px,env(safe-area-inset-top));padding-bottom:7px;gap:6px}.controls{padding-top:7px;gap:6px}.field input{padding:8px}.point-tabs button,.radii button,.common-polygon-btn{min-height:34px}.search input{padding:9px 10px}.search button,.btn{min-height:38px}}
+@media(max-width:360px){.title .mode{display:none}.grid{grid-template-columns:1fr}.field label{font-size:8.5px}}
 </style>
 </head>
 <body>
-<section class="top"><div class="title"><b>DUGA</b><span>До 3 секторів одночасно</span></div><div class="search"><input id="address" placeholder="Адреса у будь-якому форматі"><button id="searchBtn">Знайти</button></div><div id="results"></div></section>
+<section class="top">
+  <div class="title"><div class="brand"><b>DUGA</b><span class="system-tag">GEO//SYS</span></div><span class="mode">3 СЕКТОРИ · 120°</span></div>
+  <div class="search"><input id="address" placeholder="АДРЕСА / ОБ'ЄКТ / КООРДИНАТИ" autocomplete="off" spellcheck="false"><button id="searchBtn">Знайти</button></div>
+  <div id="results"></div>
+</section>
 <div id="map"><button id="fullscreenBtn" class="fullscreen-btn" type="button">⛶ На весь екран</button></div>
 <section class="controls">
-<div class="point-tabs" id="pointTabs"><button data-i="0" class="active">Точка 1</button><button data-i="1">Точка 2</button><button data-i="2">Точка 3</button></div>
-<div class="grid"><div class="field"><label>Азимут активної точки, 0–359°</label><input id="azimuth" type="number" min="0" max="359" step="1" value="0"></div><div class="field"><label>Координати активної точки</label><input id="coords" readonly value="Натисніть на карту"></div></div>
-<div class="radii" id="radii"><button data-r="1">1 км</button><button data-r="3" class="active">3 км</button><button data-r="5">5 км</button><button data-r="10">10 км</button></div>
-<div class="actions"><button id="clearBtn" class="btn secondary">Очистити точку</button><button id="fitBtn" class="btn">Показати всі</button></div>
-<button id="commonPolygonBtn" class="common-polygon-btn" type="button">⬡ Спільний полігон</button>
-<div class="status" id="status">Точка 1: натисніть на карту або знайдіть адресу.</div>
+  <div class="point-tabs" id="pointTabs"><button data-i="0" class="active">Точка 1</button><button data-i="1">Точка 2</button><button data-i="2">Точка 3</button></div>
+  <div class="grid"><div class="field"><label>Азимут активної точки // 0–359°</label><input id="azimuth" type="number" min="0" max="359" step="1" inputmode="numeric" value="0"></div><div class="field"><label>Координати активної точки // WGS84</label><input id="coords" readonly value="Натисніть на карту"></div></div>
+  <div class="radii" id="radii"><button data-r="1">1 KM</button><button data-r="3" class="active">3 KM</button><button data-r="5">5 KM</button><button data-r="10">10 KM</button></div>
+  <div class="actions"><button id="clearBtn" class="btn secondary">Очистити точку</button><button id="fitBtn" class="btn">Показати всі</button></div>
+  <button id="commonPolygonBtn" class="common-polygon-btn" type="button">⬡ Спільний полігон</button>
+  <div class="status" id="status">Точка 1: натисніть на карту або знайдіть адресу.</div>
 </section>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const tg=window.Telegram?.WebApp;if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#171a22');tg.setBackgroundColor('#0f1117')}catch(e){}}
-const map=L.map('map',{zoomControl:true}).setView([50.2547,28.6587],11);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
+const tg=window.Telegram?.WebApp;
+document.documentElement.style.colorScheme='dark';
+if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#080b0f');tg.setBackgroundColor('#080b0f');if(tg.setBottomBarColor)tg.setBottomBarColor('#0b1016')}catch(e){}}
+const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:20,attribution:'© OpenStreetMap © CARTO'}).addTo(map);
+map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
 const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;function dest(lat,lon,bearing,distance){const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R,p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t)),l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return L.latLng(deg(p2),((deg(l2)+540)%360)-180)}
 const COLORS=[{css:'#dc2626',rgb:'220,38,38'},{css:'#2563eb',rgb:'37,99,235'},{css:'#16a34a',rgb:'22,163,74'}],points=[0,1,2].map(i=>({lat:null,lon:null,bearing:0,radiusKm:3,marker:null,sector:null,color:COLORS[i]}));let activeIndex=0;
 const coords=document.getElementById('coords'),az=document.getElementById('azimuth'),status=document.getElementById('status'),results=document.getElementById('results');
-function pointIcon(i){return L.divIcon({className:'',html:`<div class="point-icon" style="background:${points[i].color.css}">${i+1}</div>`,iconSize:[28,28],iconAnchor:[14,14]})}
+function pointIcon(i){return L.divIcon({className:'',html:`<div class="point-icon" style="background:${points[i].color.css}"><span>${i+1}</span></div>`,iconSize:[28,28],iconAnchor:[14,14]})}
 class SectorLayer extends L.Layer{constructor(cfg){super();this.cfg=cfg;this.draw=this.draw.bind(this)}onAdd(m){this.m=m;this.c=L.DomUtil.create('canvas','sector-canvas');m.getPane('sectorPane').appendChild(this.c);m.on('move zoom resize viewreset',this.draw);this.draw()}onRemove(m){m.off('move zoom resize viewreset',this.draw);L.DomUtil.remove(this.c)}draw(){const {lat,lon,bearing,distance,rgb}=this.cfg,s=this.m.getSize(),tl=this.m.containerPointToLayerPoint([0,0]);L.DomUtil.setPosition(this.c,tl);const q=Math.max(1,devicePixelRatio||1);this.c.style.width=s.x+'px';this.c.style.height=s.y+'px';this.c.width=s.x*q;this.c.height=s.y*q;const x=this.c.getContext('2d');x.setTransform(q,0,0,q,0,0);x.clearRect(0,0,s.x,s.y);const arc=[];for(let o=-60;o<=60;o+=2)arc.push(dest(lat,lon,bearing+o,distance));const cp=this.m.latLngToContainerPoint([lat,lon]),ap=arc.map(p=>this.m.latLngToContainerPoint(p)),rr=Math.hypot(...Object.values(this.m.latLngToContainerPoint(dest(lat,lon,bearing,distance)).subtract(cp)));x.save();x.beginPath();x.moveTo(cp.x,cp.y);ap.forEach(p=>x.lineTo(p.x,p.y));x.closePath();x.clip();const g=x.createRadialGradient(cp.x,cp.y,0,cp.x,cp.y,rr);g.addColorStop(0,`rgba(${rgb},.46)`);g.addColorStop(.55,`rgba(${rgb},.22)`);g.addColorStop(1,`rgba(${rgb},.04)`);x.fillStyle=g;x.fillRect(0,0,s.x,s.y);x.restore();x.strokeStyle=`rgba(${rgb},.95)`;x.lineWidth=3;x.beginPath();x.moveTo(cp.x,cp.y);x.lineTo(ap[0].x,ap[0].y);x.moveTo(cp.x,cp.y);x.lineTo(ap.at(-1).x,ap.at(-1).y);x.stroke();x.lineWidth=2;x.beginPath();ap.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.stroke()}}
 function syncTabs(){document.querySelectorAll('#pointTabs button').forEach((b,i)=>{b.classList.toggle('active',i===activeIndex);b.classList.toggle('filled',points[i].lat!==null)})}function syncControls(){const p=points[activeIndex];az.value=String(p.bearing);coords.value=p.lat===null?'Натисніть на карту':`${p.lat.toFixed(7)}, ${p.lon.toFixed(7)}`;document.querySelectorAll('#radii button').forEach(b=>b.classList.toggle('active',Number(b.dataset.r)===p.radiusKm));syncTabs();status.textContent=p.lat===null?`Точка ${activeIndex+1}: натисніть на карту або знайдіть адресу.`:`Точка ${activeIndex+1}: азимут ${p.bearing}° · радіус ${p.radiusKm} км`}
 function chooseFor(i,lat,lon){const p=points[i];p.lat=lat;p.lon=lon;if(!p.marker){p.marker=L.marker([lat,lon],{draggable:true,icon:pointIcon(i)}).addTo(map);p.marker.on('dragend',e=>{const q=e.target.getLatLng();chooseFor(i,q.lat,q.lng)})}else p.marker.setLatLng([lat,lon]);drawSector(i);if(i===activeIndex)syncControls()}function drawSector(i){const p=points[i];if(p.lat===null)return;if(p.sector)map.removeLayer(p.sector);p.sector=new SectorLayer({lat:p.lat,lon:p.lon,bearing:p.bearing,distance:p.radiusKm*1000,rgb:p.color.rgb}).addTo(map);if(commonPolygonMode)setTimeout(renderCommonPolygon,0)}
