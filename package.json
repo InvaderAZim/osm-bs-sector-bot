@@ -6,7 +6,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "check": "node --check src/worker.js && node --check src/analytics_worker.js && node --check src/request_logging_worker.js && node --check src/admin_single_message_worker.js && node --check src/launch_stats_worker.js && node --check src/production_worker.js",
+    "check": "node --check src/worker.js && node --check src/analytics_worker.js && node --check src/request_logging_worker.js && node --check src/admin_single_message_worker.js && node --check src/launch_stats_worker.js && node --check src/production_worker.js && node --check src/animation_worker.js",
     "test": "vitest run"
   },
   "dependencies": {
