@@ -17,6 +17,7 @@ const ANALYTICS_EVENTS = new Set([
   'fullscreen',
 ]);
 
+const REQUEST_PAGE_SIZE = 4;
 let analyticsSchemaPromise = null;
 
 function adminIds(env) {
@@ -53,6 +54,19 @@ async function ensureAnalyticsSchema(env) {
         ON analytics_events(user_id,created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created
         ON analytics_events(event_type,created_at DESC)`;
+
+      await sql`CREATE TABLE IF NOT EXISTS search_requests(
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        query_text TEXT NOT NULL,
+        query_type TEXT NOT NULL,
+        points JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_search_requests_created_at
+        ON search_requests(created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_search_requests_user_created
+        ON search_requests(user_id,created_at DESC)`;
     })().catch(error => {
       analyticsSchemaPromise = null;
       throw error;
@@ -129,11 +143,35 @@ async function analyticsEventEndpoint(env, request) {
 function analyticsClientScript() {
   return `<script>(function(){
     const last=new Map();
+    const authenticatedFetch=window.fetch.bind(window);
+    function pointSnapshot(){
+      try{
+        if(typeof points==='undefined'||!Array.isArray(points))return[];
+        return points.slice(0,3).map((point,index)=>({
+          point:index+1,
+          lat:Number.isFinite(Number(point?.lat))?Number(point.lat):null,
+          lon:Number.isFinite(Number(point?.lon))?Number(point.lon):null,
+          azimuth:Number.isFinite(Number(point?.bearing))?Number(point.bearing):0,
+          radius_km:Number.isFinite(Number(point?.radiusKm))?Number(point.radiusKm):0
+        }));
+      }catch(error){return[]}
+    }
+    window.fetch=(input,init={})=>{
+      try{
+        const url=new URL(input instanceof Request?input.url:String(input),location.href);
+        if(url.origin===location.origin&&url.pathname==='/api/geocode'){
+          const headers=new Headers(input instanceof Request?input.headers:init.headers||{});
+          headers.set('X-DUGA-Search-Context',JSON.stringify({points:pointSnapshot()}));
+          init={...init,headers};
+        }
+      }catch(error){}
+      return authenticatedFetch(input,init);
+    };
     function send(event,meta={}){
       const now=Date.now();
       if(now-(last.get(event)||0)<350)return;
       last.set(event,now);
-      fetch('/api/analytics/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event,meta}),keepalive:true}).catch(()=>{});
+      authenticatedFetch('/api/analytics/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event,meta}),keepalive:true}).catch(()=>{});
     }
     document.addEventListener('click',event=>{
       const button=event.target.closest('button');
@@ -146,11 +184,54 @@ function analyticsClientScript() {
         if(button.id==='fullscreenBtn') return send('fullscreen');
       }
       const map=event.target.closest('#map');
-      if(map && !event.target.closest('.leaflet-control')) send('point_set');
+      if(map&&!event.target.closest('.leaflet-control')) send('point_set');
     },true);
     const az=document.getElementById('azimuth');
     if(az) az.addEventListener('change',()=>send('azimuth_change'));
   })();</script>`;
+}
+
+function normalizeSearchPoints(rawHeader) {
+  if (!rawHeader || rawHeader.length > 4096) return [];
+  try {
+    const parsed = JSON.parse(rawHeader);
+    if (!Array.isArray(parsed?.points)) return [];
+    return parsed.points.slice(0, 3).map((point, index) => {
+      const lat = Number(point?.lat);
+      const lon = Number(point?.lon);
+      const azimuth = Number(point?.azimuth);
+      const radius = Number(point?.radius_km);
+      return {
+        point: index + 1,
+        lat: Number.isFinite(lat) && Math.abs(lat) <= 90 ? Number(lat.toFixed(7)) : null,
+        lon: Number.isFinite(lon) && Math.abs(lon) <= 180 ? Number(lon.toFixed(7)) : null,
+        azimuth: Number.isFinite(azimuth) ? ((Math.round(azimuth) % 360) + 360) % 360 : 0,
+        radius_km: Number.isFinite(radius) && radius >= 0 && radius <= 100 ? Number(radius.toFixed(2)) : 0,
+      };
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+function queryType(query) {
+  const value = String(query || '').trim();
+  if (/^-?\d{1,3}(?:\.\d+)?\s*[,; ]\s*-?\d{1,3}(?:\.\d+)?$/.test(value)) return 'coordinates';
+  return 'address_or_text';
+}
+
+async function logSearchRequest(env, userId, query, request) {
+  try {
+    await ensureAnalyticsSchema(env);
+    const sql = sqlClient(env);
+    const points = normalizeSearchPoints(request.headers.get('X-DUGA-Search-Context') || '');
+    const safeQuery = String(query || '').trim().slice(0, 300);
+    if (!safeQuery) return;
+    await sql`INSERT INTO search_requests(user_id,query_text,query_type,points,created_at)
+      VALUES(${Number(userId)},${safeQuery},${queryType(safeQuery)},${JSON.stringify(points)}::jsonb,NOW())`;
+  } catch (error) {
+    console.warn('DUGA search request logging skipped', error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function tgCall(env, method, payload = {}) {
@@ -167,11 +248,11 @@ async function tgCall(env, method, payload = {}) {
 }
 
 function periodConfig(raw) {
-  const days = [1, 7, 30, 90].includes(Number(raw)) ? Number(raw) : 7;
+  const days = [1, 7, 30].includes(Number(raw)) ? Number(raw) : 1;
   return {
     days,
-    label: days === 1 ? '24 години' : `${days} днів`,
-    cutoff: new Date(Date.now() - days * 86400000).toISOString(),
+    label: days === 1 ? 'сьогодні' : `${days} днів`,
+    offsetDays: days - 1,
   };
 }
 
@@ -179,122 +260,201 @@ function number(value) {
   return Number(value || 0);
 }
 
-async function analyticsSnapshot(env, rawDays = 7) {
+function requesterName(row) {
+  const fullName = [row?.first_name, row?.last_name].filter(Boolean).join(' ').trim();
+  return fullName || (row?.username ? `@${String(row.username).replace(/^@/, '')}` : `ID ${row?.user_id || '—'}`);
+}
+
+function usernameLabel(row) {
+  return row?.username ? `@${String(row.username).replace(/^@/, '')}` : '—';
+}
+
+function kyivDateTime(value) {
+  try {
+    return new Intl.DateTimeFormat('uk-UA', {
+      timeZone: 'Europe/Kyiv',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(value));
+  } catch (_) {
+    return String(value || '');
+  }
+}
+
+function pointText(points) {
+  if (!Array.isArray(points) || !points.length) return 'Точки не задані';
+  return points.map((point, index) => {
+    const n = Number(point?.point || index + 1);
+    const coords = Number.isFinite(Number(point?.lat)) && Number.isFinite(Number(point?.lon))
+      ? `${Number(point.lat).toFixed(6)}, ${Number(point.lon).toFixed(6)}`
+      : 'не задана';
+    const azimuth = Number.isFinite(Number(point?.azimuth)) ? `${Number(point.azimuth)}°` : '—';
+    const radius = Number.isFinite(Number(point?.radius_km)) ? `${Number(point.radius_km)} км` : '—';
+    return `P${n}: ${coords} · az ${azimuth} · r ${radius}`;
+  }).join('\n');
+}
+
+async function requestStatsSnapshot(env, rawDays = 1) {
   await ensureAnalyticsSchema(env);
-  const { days, label, cutoff } = periodConfig(rawDays);
+  const { days, label, offsetDays } = periodConfig(rawDays);
   const sql = sqlClient(env);
-  const userRows = await sql`SELECT
+  const summaryRows = await sql`SELECT
       COUNT(*)::int AS total,
-      COUNT(*) FILTER (WHERE status='approved')::int AS approved,
-      COUNT(*) FILTER (WHERE status='pending' AND COALESCE(phone,'')<>'')::int AS pending,
-      COUNT(*) FILTER (WHERE status='blocked')::int AS blocked,
-      COUNT(*) FILTER (WHERE created_at >= ${cutoff}::timestamptz)::int AS new_users
-    FROM users`;
-  const eventRows = await sql`SELECT
-      COUNT(*) FILTER (WHERE is_admin=FALSE)::int AS events,
-      COUNT(DISTINCT user_id) FILTER (WHERE is_admin=FALSE)::int AS active_users,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='app_open')::int AS app_opens,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='geocode_search')::int AS searches,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='point_set')::int AS points,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='common_polygon')::int AS polygons,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='fullscreen')::int AS fullscreen,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='bot_start')::int AS starts
-    FROM analytics_events
-    WHERE created_at >= ${cutoff}::timestamptz`;
-  const returningRows = await sql`SELECT COUNT(*)::int AS returning_users FROM (
-      SELECT user_id
-      FROM analytics_events
-      WHERE created_at >= ${cutoff}::timestamptz AND is_admin=FALSE
-      GROUP BY user_id
-      HAVING COUNT(DISTINCT created_at::date) >= 2
-    ) AS returning`;
-  const topRows = await sql`SELECT e.user_id,
-      COALESCE(NULLIF(TRIM(CONCAT_WS(' ',u.first_name,u.last_name)),''),NULLIF(u.username,''),e.user_id::text) AS name,
-      COUNT(*)::int AS events
-    FROM analytics_events e
-    LEFT JOIN users u ON u.user_id=e.user_id
-    WHERE e.created_at >= ${cutoff}::timestamptz AND e.is_admin=FALSE
-    GROUP BY e.user_id,u.first_name,u.last_name,u.username
-    ORDER BY COUNT(*) DESC
-    LIMIT 5`;
-  const dailyRows = await sql`SELECT created_at::date AS day,
-      COUNT(DISTINCT user_id) FILTER (WHERE is_admin=FALSE)::int AS active,
-      COUNT(*) FILTER (WHERE is_admin=FALSE AND event_type='app_open')::int AS opens
-    FROM analytics_events
-    WHERE created_at >= ${cutoff}::timestamptz
-    GROUP BY created_at::date
-    ORDER BY day DESC
-    LIMIT 7`;
+      COUNT(DISTINCT user_id)::int AS requesters
+    FROM search_requests
+    WHERE created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')`;
+  const dailyRows = await sql`SELECT
+      (created_at AT TIME ZONE 'Europe/Kyiv')::date AS day,
+      COUNT(*)::int AS requests
+    FROM search_requests
+    WHERE created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')
+    GROUP BY (created_at AT TIME ZONE 'Europe/Kyiv')::date
+    ORDER BY day DESC`;
+  const requesterRows = await sql`SELECT
+      r.user_id,u.first_name,u.last_name,u.username,u.phone,COUNT(*)::int AS requests
+    FROM search_requests r
+    LEFT JOIN users u ON u.user_id=r.user_id
+    WHERE r.created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')
+    GROUP BY r.user_id,u.first_name,u.last_name,u.username,u.phone
+    ORDER BY COUNT(*) DESC,MAX(r.created_at) DESC
+    LIMIT 8`;
   return {
     days,
     label,
-    users: userRows[0] || {},
-    events: eventRows[0] || {},
-    returning: number(returningRows[0]?.returning_users),
-    top: topRows,
-    daily: dailyRows.reverse(),
+    total: number(summaryRows[0]?.total),
+    requesters: number(summaryRows[0]?.requesters),
+    daily: dailyRows,
+    users: requesterRows,
   };
 }
 
-function analyticsText(snapshot) {
-  const u = snapshot.users;
-  const e = snapshot.events;
-  const active = number(e.active_users);
-  const events = number(e.events);
-  const intensity = active ? (events / active).toFixed(1) : '0.0';
-  const top = snapshot.top.length
-    ? snapshot.top.map((row, index) => `${index + 1}. ${String(row.name).slice(0,28)} — ${number(row.events)}`).join('\n')
-    : 'Ще немає даних.';
+function statsOverviewText(snapshot) {
   const daily = snapshot.daily.length
-    ? snapshot.daily.map(row => `${String(row.day).slice(5,10)} · 👤 ${number(row.active)} · 🚀 ${number(row.opens)}`).join('\n')
-    : 'Ще немає даних.';
-  return `📊 <b>DUGA — статистика та аналітика</b>\nПеріод: <b>${snapshot.label}</b>\n\n` +
-    `👥 <b>Користувачі</b>\n` +
-    `Всього: <b>${number(u.total)}</b>\n` +
-    `✅ Доступ: ${number(u.approved)} · ⏳ Очікують: ${number(u.pending)} · ⛔ Заблоковано: ${number(u.blocked)}\n` +
-    `🆕 Нові за період: <b>${number(u.new_users)}</b>\n\n` +
-    `📱 <b>Використання без активності адмінів</b>\n` +
-    `Активні користувачі: <b>${active}</b>\n` +
-    `Повторно активні: <b>${snapshot.returning}</b>\n` +
-    `🚀 Запуски Mini App: <b>${number(e.app_opens)}</b>\n` +
-    `🔎 Пошуки адрес: <b>${number(e.searches)}</b>\n` +
-    `📍 Встановлення точок: <b>${number(e.points)}</b>\n` +
-    `⬡ Спільний полігон: <b>${number(e.polygons)}</b>\n` +
-    `⛶ Fullscreen: <b>${number(e.fullscreen)}</b>\n` +
-    `▶️ /start: <b>${number(e.starts)}</b>\n` +
-    `Подій: <b>${events}</b> · на активного: <b>${intensity}</b>\n\n` +
-    `📅 <b>Останні дні</b>\n${daily}\n\n` +
-    `🏆 <b>Найактивніші</b>\n${top}`;
+    ? snapshot.daily.map(row => `• ${String(row.day).slice(0,10)} — <b>${number(row.requests)}</b>`).join('\n')
+    : 'Ще немає запитів.';
+  const users = snapshot.users.length
+    ? snapshot.users.map((row, index) => {
+        const phone = row.phone || '—';
+        return `${index + 1}. <b>${escapeHtml(requesterName(row))}</b> · ${escapeHtml(usernameLabel(row))}\n   📱 <code>${escapeHtml(phone)}</code> · запитів: <b>${number(row.requests)}</b>`;
+      }).join('\n')
+    : 'Ще немає користувачів із запитами.';
+  return `📊 <b>DUGA — статистика запитів</b>\n` +
+    `Період: <b>${snapshot.label}</b>\n\n` +
+    `🔎 Всього запитів: <b>${snapshot.total}</b>\n` +
+    `👥 Робили запити: <b>${snapshot.requesters}</b>\n\n` +
+    `📅 <b>Запитів за день</b>\n${daily}\n\n` +
+    `👤 <b>Хто робив запити</b>\n${users}`;
 }
 
-function analyticsKeyboard(days) {
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[char]));
+}
+
+function statsKeyboard(days) {
   return { inline_keyboard: [
     [
-      { text: days === 1 ? '● 24 год' : '24 год', callback_data: 'analytics:period:1' },
+      { text: days === 1 ? '● Сьогодні' : 'Сьогодні', callback_data: 'analytics:period:1' },
       { text: days === 7 ? '● 7 днів' : '7 днів', callback_data: 'analytics:period:7' },
-    ],
-    [
       { text: days === 30 ? '● 30 днів' : '30 днів', callback_data: 'analytics:period:30' },
-      { text: days === 90 ? '● 90 днів' : '90 днів', callback_data: 'analytics:period:90' },
     ],
+    [{ text: '📋 Деталі запитів', callback_data: `analytics:requests:${days}:0` }],
     [{ text: '🔄 Оновити', callback_data: `analytics:period:${days}` }],
     [{ text: '⬅️ Назад', callback_data: 'main:menu' }],
   ] };
 }
 
-async function sendAnalytics(env, chatId, days = 7, messageId = null) {
-  const snapshot = await analyticsSnapshot(env, days);
+async function sendAnalytics(env, chatId, days = 1, messageId = null) {
+  const snapshot = await requestStatsSnapshot(env, days);
   const payload = {
     chat_id: Number(chatId),
-    text: analyticsText(snapshot),
+    text: statsOverviewText(snapshot),
     parse_mode: 'HTML',
-    reply_markup: analyticsKeyboard(snapshot.days),
+    reply_markup: statsKeyboard(snapshot.days),
     disable_web_page_preview: true,
   };
-  if (messageId) {
-    return tgCall(env, 'editMessageText', { ...payload, message_id: Number(messageId) });
-  }
+  if (messageId) return tgCall(env, 'editMessageText', { ...payload, message_id: Number(messageId) });
   return tgCall(env, 'sendMessage', payload);
+}
+
+async function requestDetails(env, rawDays = 1, requestedPage = 0) {
+  await ensureAnalyticsSchema(env);
+  const { days, label, offsetDays } = periodConfig(rawDays);
+  const sql = sqlClient(env);
+  const countRows = await sql`SELECT COUNT(*)::int AS total
+    FROM search_requests
+    WHERE created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')`;
+  const total = number(countRows[0]?.total);
+  const lastPage = Math.max(0, Math.ceil(total / REQUEST_PAGE_SIZE) - 1);
+  const page = Math.min(Math.max(0, Number(requestedPage) || 0), lastPage);
+  const offset = page * REQUEST_PAGE_SIZE;
+  const rows = await sql`SELECT
+      r.id,r.user_id,r.query_text,r.query_type,r.points,r.created_at,
+      u.first_name,u.last_name,u.username,u.phone
+    FROM search_requests r
+    LEFT JOIN users u ON u.user_id=r.user_id
+    WHERE r.created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')
+    ORDER BY r.created_at DESC,r.id DESC
+    LIMIT ${REQUEST_PAGE_SIZE} OFFSET ${offset}`;
+  return { days, label, total, page, lastPage, rows };
+}
+
+function requestDetailsText(snapshot) {
+  if (!snapshot.rows.length) return `📋 <b>Деталі запитів</b>\nПеріод: <b>${snapshot.label}</b>\n\nЗапитів ще немає.`;
+  const cards = snapshot.rows.map((row, index) => {
+    const type = row.query_type === 'coordinates' ? 'координати' : 'адреса / текст';
+    return `<b>${snapshot.page * REQUEST_PAGE_SIZE + index + 1}. ${escapeHtml(kyivDateTime(row.created_at))}</b>\n` +
+      `👤 ${escapeHtml(requesterName(row))}\n` +
+      `🔗 ${escapeHtml(usernameLabel(row))}\n` +
+      `📱 <code>${escapeHtml(row.phone || '—')}</code>\n` +
+      `🔎 Тип: <b>${type}</b>\n` +
+      `📝 <code>${escapeHtml(String(row.query_text || '').slice(0, 220))}</code>\n` +
+      `📍 ${escapeHtml(pointText(row.points))}`;
+  });
+  return `📋 <b>Деталі запитів</b>\n` +
+    `Період: <b>${snapshot.label}</b> · всього: <b>${snapshot.total}</b>\n` +
+    `Сторінка: <b>${snapshot.page + 1}/${snapshot.lastPage + 1}</b>\n\n` +
+    cards.join('\n\n');
+}
+
+function requestDetailsKeyboard(snapshot) {
+  const nav = [];
+  if (snapshot.page > 0) nav.push({ text: '⬅️', callback_data: `analytics:requests:${snapshot.days}:${snapshot.page - 1}` });
+  nav.push({ text: `${snapshot.page + 1}/${snapshot.lastPage + 1}`, callback_data: 'analytics:noop' });
+  if (snapshot.page < snapshot.lastPage) nav.push({ text: '➡️', callback_data: `analytics:requests:${snapshot.days}:${snapshot.page + 1}` });
+  return { inline_keyboard: [
+    nav,
+    [{ text: '📊 До статистики', callback_data: `analytics:period:${snapshot.days}` }],
+    [{ text: '⬅️ Назад', callback_data: 'main:menu' }],
+  ] };
+}
+
+async function sendRequestDetails(env, chatId, days = 1, page = 0, messageId = null) {
+  const snapshot = await requestDetails(env, days, page);
+  const payload = {
+    chat_id: Number(chatId),
+    text: requestDetailsText(snapshot),
+    parse_mode: 'HTML',
+    reply_markup: requestDetailsKeyboard(snapshot),
+    disable_web_page_preview: true,
+  };
+  if (messageId) return tgCall(env, 'editMessageText', { ...payload, message_id: Number(messageId) });
+  return tgCall(env, 'sendMessage', payload);
+}
+
+async function sendAdminPanel(env, chatId) {
+  return tgCall(env, 'sendMessage', {
+    chat_id: Number(chatId),
+    text: '🛡 Адмін-панель DUGA',
+    reply_markup: { inline_keyboard: [
+      [{ text: '📊 Статистика', callback_data: 'analytics:period:1' }],
+    ] },
+  });
 }
 
 async function setAdminCommands(env, adminId) {
@@ -302,7 +462,7 @@ async function setAdminCommands(env, adminId) {
     await tgCall(env, 'setMyCommands', {
       scope: { type: 'chat', chat_id: Number(adminId) },
       commands: [
-        { command: 'stats', description: 'Статистика та аналітика DUGA' },
+        { command: 'stats', description: 'Статистика запитів DUGA' },
         { command: 'status', description: 'Стан системи DUGA' },
       ],
     });
@@ -320,27 +480,43 @@ async function postProcessTelegramUpdate(env, update, ctx) {
   if (!user?.id) return;
   const callback = update.callback_query;
   const message = update.message || update.edited_message;
+
   if (callback) {
     ctx.waitUntil(trackEvent(env, user.id, 'bot_callback'));
     const data = String(callback.data || '');
-    if (isAdmin(env, user.id) && data.startsWith('analytics:period:')) {
+    if (!isAdmin(env, user.id)) return;
+    if (data === 'analytics:noop') return;
+    if (data.startsWith('analytics:period:')) {
       const days = Number(data.split(':').at(-1));
       try {
         await sendAnalytics(env, callback.message?.chat?.id || user.id, days, callback.message?.message_id || null);
       } catch (error) {
         console.error('DUGA analytics menu failed', error instanceof Error ? error.stack : error);
       }
+      return;
+    }
+    if (data.startsWith('analytics:requests:')) {
+      const [, , rawDays, rawPage] = data.split(':');
+      try {
+        await sendRequestDetails(env, callback.message?.chat?.id || user.id, Number(rawDays), Number(rawPage), callback.message?.message_id || null);
+      } catch (error) {
+        console.error('DUGA request details failed', error instanceof Error ? error.stack : error);
+      }
     }
     return;
   }
+
   if (!message) return;
   const text = String(message.text || '').trim();
   ctx.waitUntil(trackEvent(env, user.id, text === '/start' || text.startsWith('/start ') ? 'bot_start' : 'bot_message'));
   if (!isAdmin(env, user.id)) return;
-  if (text === '/start' || text.startsWith('/start ')) ctx.waitUntil(setAdminCommands(env, user.id));
+  if (text === '/start' || text.startsWith('/start ')) {
+    ctx.waitUntil(setAdminCommands(env, user.id));
+    try { await sendAdminPanel(env, message.chat?.id || user.id); } catch (_) {}
+  }
   if (text === '/stats' || text === '📊 Статистика') {
     try {
-      await sendAnalytics(env, message.chat?.id || user.id, 7);
+      await sendAnalytics(env, message.chat?.id || user.id, 1);
     } catch (error) {
       console.error('DUGA analytics command failed', error instanceof Error ? error.stack : error);
     }
@@ -373,8 +549,12 @@ export default {
       const userPromise = webUser(env, request).catch(() => null);
       const response = await baseWorker.fetch(request, env, ctx);
       const user = await userPromise;
-      if (user && response.ok && (url.searchParams.get('q') || '').trim().length >= 2) {
-        ctx.waitUntil(trackEvent(env, user.id, 'geocode_search'));
+      const query = (url.searchParams.get('q') || '').trim();
+      if (user && response.ok && query.length >= 2) {
+        ctx.waitUntil(Promise.all([
+          trackEvent(env, user.id, 'geocode_search'),
+          logSearchRequest(env, user.id, query, request),
+        ]));
       }
       return response;
     }
