@@ -17,6 +17,30 @@ function sqlClient(env) {
   return neon(env.DATABASE_URL);
 }
 
+async function ensureStatsSchema(env) {
+  const sql = sqlClient(env);
+  await sql`CREATE TABLE IF NOT EXISTS analytics_events(
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    event_type TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created
+    ON analytics_events(event_type,created_at DESC)`;
+  await sql`CREATE TABLE IF NOT EXISTS search_requests(
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    query_text TEXT NOT NULL,
+    query_type TEXT NOT NULL,
+    points JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_requests_created_at
+    ON search_requests(created_at DESC)`;
+}
+
 function periodConfig(raw) {
   const days = [1, 7, 30].includes(Number(raw)) ? Number(raw) : 1;
   return { days, label: days === 1 ? 'сьогодні' : `${days} днів`, offsetDays: days - 1 };
@@ -49,6 +73,7 @@ function kyivDateTime(value) {
 }
 
 async function telegram(env, method, payload) {
+  if (!env.TELEGRAM_BOT_TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is missing');
   const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,21 +86,22 @@ async function telegram(env, method, payload) {
 }
 
 async function snapshot(env, rawDays) {
+  await ensureStatsSchema(env);
   const { days, label, offsetDays } = periodConfig(rawDays);
   const sql = sqlClient(env);
-  const cutoffSql = `((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')`;
 
   const requestSummary = await sql`SELECT COUNT(*)::int AS total, COUNT(DISTINCT user_id)::int AS users
     FROM search_requests
     WHERE created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')`;
 
-  const requestUsers = await sql`SELECT r.user_id,u.first_name,u.last_name,u.username,u.phone,COUNT(*)::int AS requests
+  const requestUsers = await sql`SELECT r.user_id,u.first_name,u.last_name,u.username,u.phone,
+      COUNT(*)::int AS requests,MAX(r.created_at) AS last_request
     FROM search_requests r
     LEFT JOIN users u ON u.user_id=r.user_id
     WHERE r.created_at >= ((date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv') - (${offsetDays} * INTERVAL '1 day')) AT TIME ZONE 'Europe/Kyiv')
     GROUP BY r.user_id,u.first_name,u.last_name,u.username,u.phone
-    ORDER BY COUNT(*) DESC,MAX(r.created_at) DESC
-    LIMIT 6`;
+    ORDER BY MAX(r.created_at) DESC
+    LIMIT 8`;
 
   const launchSummary = await sql`SELECT COUNT(*)::int AS launches, COUNT(DISTINCT user_id)::int AS users
     FROM analytics_events
@@ -106,7 +132,12 @@ async function snapshot(env, rawDays) {
 
 function statsText(s) {
   const requestUsers = s.requestUsers.length
-    ? s.requestUsers.map((row, i) => `${i + 1}. <b>${esc(userName(row))}</b> · ${esc(username(row))}\n   📱 <code>${esc(row.phone || '—')}</code> · 🔎 ${Number(row.requests || 0)}`).join('\n')
+    ? s.requestUsers.map((row, i) => {
+        const role = isAdmin({ ADMIN_TELEGRAM_USER_IDS: '' }, row.user_id) ? ' · 🛡' : '';
+        return `${i + 1}. <b>${esc(userName(row))}</b>${role}\n` +
+          `   ${esc(username(row))} · 📱 <code>${esc(row.phone || '—')}</code>\n` +
+          `   🆔 <code>${esc(row.user_id)}</code> · 🔎 ${Number(row.requests || 0)} · 🕒 ${esc(kyivDateTime(row.last_request))}`;
+      }).join('\n')
     : 'Ще немає користувачів із запитами.';
 
   const launchUsers = s.launchUsers.length
