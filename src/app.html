@@ -107,15 +107,35 @@ document.documentElement.style.colorScheme='dark';
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#070b10');tg.setBackgroundColor('#070b10');if(tg.setBottomBarColor)tg.setBottomBarColor('#070b10')}catch(e){}}
 const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
 const OSM_ATTR='&copy; OpenStreetMap contributors';
-let baseTiles=L.tileLayer('https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',{maxZoom:20,attribution:OSM_ATTR,crossOrigin:true}).addTo(map);
-let tileFallbackUsed=false;
-baseTiles.on('tileerror',()=>{
-  if(tileFallbackUsed)return;
-  tileFallbackUsed=true;
-  try{map.removeLayer(baseTiles)}catch(e){}
-  baseTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{subdomains:'abcd',maxZoom:20,attribution:OSM_ATTR+' &copy; CARTO',crossOrigin:true}).addTo(map);
-  status.textContent='Картографічний шар переключено на резервний.';
-});
+const TILE_PROVIDERS=[
+  {url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png',options:{maxZoom:19,attribution:OSM_ATTR,crossOrigin:true}},
+  {url:'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',options:{subdomains:'abc',maxZoom:20,attribution:OSM_ATTR,crossOrigin:true}},
+  {url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',options:{subdomains:'abcd',maxZoom:20,attribution:OSM_ATTR+' &copy; CARTO',crossOrigin:true}}
+];
+let baseTiles=null,tileProviderIndex=0,tileSwitching=false;
+function loadTileProvider(index){
+  if(index>=TILE_PROVIDERS.length){
+    console.warn('DUGA: all tile providers failed');
+    return;
+  }
+  tileProviderIndex=index;
+  tileSwitching=false;
+  if(baseTiles){try{map.removeLayer(baseTiles)}catch(e){}}
+  const provider=TILE_PROVIDERS[index];
+  baseTiles=L.tileLayer(provider.url,provider.options);
+  let errors=0,loaded=false;
+  baseTiles.on('tileload',()=>{loaded=true;errors=0});
+  baseTiles.on('tileerror',()=>{
+    errors++;
+    if(tileSwitching)return;
+    if(!loaded&&errors>=2){
+      tileSwitching=true;
+      setTimeout(()=>loadTileProvider(index+1),0);
+    }
+  });
+  baseTiles.addTo(map);
+}
+loadTileProvider(0);
 map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
 const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;function dest(lat,lon,bearing,distance){const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R,p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t)),l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return L.latLng(deg(p2),((deg(l2)+540)%360)-180)}
 const COLORS=[{css:'#dc2626',rgb:'220,38,38'},{css:'#2563eb',rgb:'37,99,235'},{css:'#16a34a',rgb:'22,163,74'}],points=[0,1,2].map(i=>({lat:null,lon:null,bearing:0,radiusKm:3,marker:null,sector:null,color:COLORS[i]}));let activeIndex=0;
