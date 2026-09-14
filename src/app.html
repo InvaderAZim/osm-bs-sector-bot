@@ -108,11 +108,12 @@ if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#070b10');tg.setBackgroundC
 const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
 const OSM_ATTR='&copy; OpenStreetMap contributors';
 const TILE_PROVIDERS=[
-  {url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png',options:{maxZoom:19,attribution:OSM_ATTR,crossOrigin:true}},
-  {url:'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',options:{subdomains:'abc',maxZoom:20,attribution:OSM_ATTR,crossOrigin:true}},
-  {url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',options:{subdomains:'abcd',maxZoom:20,attribution:OSM_ATTR+' &copy; CARTO',crossOrigin:true}}
+  {url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png',options:{maxZoom:19,attribution:OSM_ATTR}},
+  {url:'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',options:{subdomains:'abc',maxZoom:20,attribution:OSM_ATTR}},
+  {url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',options:{subdomains:'abcd',maxZoom:20,attribution:OSM_ATTR+' &copy; CARTO'}},
+  {url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',options:{maxZoom:19,attribution:'Tiles &copy; Esri'}}
 ];
-let baseTiles=null,tileProviderIndex=0,tileSwitching=false;
+let baseTiles=null,tileProviderIndex=0,tileSwitching=false,tileWatchdog=null;
 function loadTileProvider(index){
   if(index>=TILE_PROVIDERS.length){
     console.warn('DUGA: all tile providers failed');
@@ -120,20 +121,20 @@ function loadTileProvider(index){
   }
   tileProviderIndex=index;
   tileSwitching=false;
+  if(tileWatchdog){clearTimeout(tileWatchdog);tileWatchdog=null}
   if(baseTiles){try{map.removeLayer(baseTiles)}catch(e){}}
   const provider=TILE_PROVIDERS[index];
   baseTiles=L.tileLayer(provider.url,provider.options);
-  let errors=0,loaded=false;
-  baseTiles.on('tileload',()=>{loaded=true;errors=0});
-  baseTiles.on('tileerror',()=>{
-    errors++;
+  let loadedTiles=0,errors=0;
+  const fallback=()=>{
     if(tileSwitching)return;
-    if(!loaded&&errors>=2){
-      tileSwitching=true;
-      setTimeout(()=>loadTileProvider(index+1),0);
-    }
-  });
+    tileSwitching=true;
+    setTimeout(()=>loadTileProvider(index+1),0);
+  };
+  baseTiles.on('tileload',()=>{loadedTiles++;errors=0;if(tileWatchdog){clearTimeout(tileWatchdog);tileWatchdog=null}});
+  baseTiles.on('tileerror',()=>{errors++;if(loadedTiles===0&&errors>=2)fallback()});
   baseTiles.addTo(map);
+  tileWatchdog=setTimeout(()=>{if(loadedTiles===0)fallback()},3500);
 }
 loadTileProvider(0);
 map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
