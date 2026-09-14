@@ -74,12 +74,14 @@ function injectAnimations(html) {
 
 async function serveMapTile(request, ctx) {
   const url = new URL(request.url);
-  const match = /^\/tiles\/(\d{1,2})\/(\d+)\/(\d+)\.png$/.exec(url.pathname);
+  const match = /^\/tiles\/(?:(standard|topo|hot)\/)?(\d{1,2})\/(\d+)\/(\d+)\.png$/.exec(url.pathname);
   if (!match) return null;
 
-  const z = Number(match[1]);
-  const x = Number(match[2]);
-  const y = Number(match[3]);
+  const layer = match[1] || 'standard';
+  const z = Number(match[2]);
+  const x = Number(match[3]);
+  const y = Number(match[4]);
+  const maxNativeZoom = layer === 'topo' ? 17 : 19;
   const limit = 2 ** z;
   if (!Number.isInteger(z) || z < 0 || z > 19 ||
       !Number.isInteger(x) || !Number.isInteger(y) ||
@@ -92,13 +94,34 @@ async function serveMapTile(request, ctx) {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  const upstreams = [
-    `https://tile.openstreetmap.de/${z}/${x}/${y}.png`,
-    `https://a.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
-  ];
+  const shard = ['a','b','c'][(x + y) % 3];
+  const providers = {
+    standard: {
+      name: 'OpenStreetMap-DE',
+      urls: [
+        `https://tile.openstreetmap.de/${z}/${x}/${y}.png`,
+        `https://a.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
+      ],
+    },
+    topo: {
+      name: 'OpenTopoMap',
+      urls: z <= maxNativeZoom ? [
+        `https://${shard}.tile.opentopomap.org/${z}/${x}/${y}.png`,
+      ] : [],
+    },
+    hot: {
+      name: 'OSM-HOT',
+      urls: [
+        `https://${shard}.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png`,
+      ],
+    },
+  };
+
+  const selected = providers[layer] || providers.standard;
+  if (!selected.urls.length) return new Response('Tile zoom unavailable', { status: 404 });
 
   let upstream = null;
-  for (const upstreamUrl of upstreams) {
+  for (const upstreamUrl of selected.urls) {
     try {
       const candidate = await fetch(upstreamUrl, {
         headers: {
@@ -111,22 +134,20 @@ async function serveMapTile(request, ctx) {
         upstream = candidate;
         break;
       }
-      console.warn('DUGA map tile upstream status', candidate.status, upstreamUrl, z, x, y);
+      console.warn('DUGA map tile upstream status', candidate.status, layer, upstreamUrl, z, x, y);
     } catch (error) {
-      console.warn('DUGA map tile upstream failed', upstreamUrl, error instanceof Error ? error.message : String(error));
+      console.warn('DUGA map tile upstream failed', layer, upstreamUrl, error instanceof Error ? error.message : String(error));
     }
   }
 
-  if (!upstream) {
-    return new Response('Map tile unavailable', { status: 502 });
-  }
+  if (!upstream) return new Response('Map tile unavailable', { status: 502 });
 
   const headers = new Headers();
-  headers.set('Content-Type', upstream.headers.get('Content-Type') || 'image/jpeg');
+  headers.set('Content-Type', upstream.headers.get('Content-Type') || 'image/png');
   headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-DE');
+  headers.set('X-DUGA-Tile-Provider', selected.name);
 
   const response = new Response(upstream.body, { status: 200, headers });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
