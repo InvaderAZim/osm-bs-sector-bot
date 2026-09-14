@@ -11,7 +11,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
 <style>
 :root{
   color-scheme:dark;
@@ -102,28 +101,64 @@ body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}body.duga-
   <div class="status" id="status">Точка 1: натисніть на карту або знайдіть адресу.</div>
 </section>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
 <script>
 const tg=window.Telegram?.WebApp;
 document.documentElement.style.colorScheme='dark';
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#070b10');tg.setBackgroundColor('#070b10');if(tg.setBottomBarColor)tg.setBottomBarColor('#070b10')}catch(e){}}
 const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
-let baseTiles=null;
-function loadBaseMap(){
-  if(typeof L.maplibreGL==='function'){
-    baseTiles=L.maplibreGL({
-      style:'https://tiles.openfreemap.org/styles/liberty',
-      attribution:'OpenFreeMap © OpenMapTiles Data from OpenStreetMap'
-    }).addTo(map);
+const BASEMAPS=[
+  {
+    name:'CARTO',
+    url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    options:{subdomains:'abcd',maxZoom:20,attribution:'&copy; OpenStreetMap contributors &copy; CARTO'}
+  },
+  {
+    name:'Esri',
+    url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    options:{maxZoom:19,attribution:'Tiles &copy; Esri'}
+  }
+];
+let baseTiles=null,baseMapIndex=0,baseMapTimer=null,baseMapSwitching=false;
+function setMapStatus(message){
+  const el=document.getElementById('status');
+  if(el)el.textContent=message;
+}
+function loadBaseMap(index=0){
+  if(index>=BASEMAPS.length){
+    setMapStatus('Не вдалося завантажити картографічний шар.');
     return;
   }
-  baseTiles=L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png',{
-    maxZoom:19,
-    attribution:'&copy; OpenStreetMap contributors'
-  }).addTo(map);
+  baseMapIndex=index;
+  baseMapSwitching=false;
+  if(baseMapTimer){clearTimeout(baseMapTimer);baseMapTimer=null}
+  if(baseTiles){try{map.removeLayer(baseTiles)}catch(e){}}
+  const provider=BASEMAPS[index];
+  let loaded=0,errors=0;
+  baseTiles=L.tileLayer(provider.url,{
+    ...provider.options,
+    updateWhenIdle:true,
+    keepBuffer:3
+  });
+  const fallback=()=>{
+    if(baseMapSwitching)return;
+    baseMapSwitching=true;
+    if(baseMapTimer){clearTimeout(baseMapTimer);baseMapTimer=null}
+    try{map.removeLayer(baseTiles)}catch(e){}
+    loadBaseMap(index+1);
+  };
+  baseTiles.on('tileload',()=>{
+    loaded++;
+    errors=0;
+    if(baseMapTimer){clearTimeout(baseMapTimer);baseMapTimer=null}
+  });
+  baseTiles.on('tileerror',()=>{
+    errors++;
+    if(loaded===0&&errors>=2)fallback();
+  });
+  baseTiles.addTo(map);
+  baseMapTimer=setTimeout(()=>{if(loaded===0)fallback()},4500);
 }
-loadBaseMap();
+loadBaseMap(0);
 map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
 const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;function dest(lat,lon,bearing,distance){const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R,p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t)),l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return L.latLng(deg(p2),((deg(l2)+540)%360)-180)}
 const COLORS=[{css:'#dc2626',rgb:'220,38,38'},{css:'#2563eb',rgb:'37,99,235'},{css:'#16a34a',rgb:'22,163,74'}],points=[0,1,2].map(i=>({lat:null,lon:null,bearing:0,radiusKm:3,marker:null,sector:null,color:COLORS[i]}));let activeIndex=0;
