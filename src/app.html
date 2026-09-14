@@ -94,7 +94,33 @@ body.duga-fullscreen .layers-menu{position:fixed;top:auto;right:14px;bottom:max(
 .leaflet-control-attribution a{color:#a3c1d4!important}
 .leaflet-bar{width:44px!important;border:1px solid #294156!important;box-shadow:0 8px 22px rgba(0,0,0,.32)!important;border-radius:12px!important;overflow:hidden}
 .leaflet-container{font-family:var(--font-mono)}
-body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}body.duga-fullscreen #map{height:100vh;min-height:100vh}body.duga-fullscreen .fullscreen-btn{position:fixed;top:auto;right:14px;bottom:max(18px,calc(env(safe-area-inset-bottom,0px) + 18px))}
+body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}
+body.duga-fullscreen #map{height:100vh;min-height:100vh}
+body.duga-fullscreen .fullscreen-btn{position:fixed;top:auto;right:14px;bottom:max(18px,calc(env(safe-area-inset-bottom,0px) + 18px))}
+body.duga-fullscreen .leaflet-control-zoom{
+  position:fixed!important;
+  top:auto!important;
+  left:auto!important;
+  right:118px!important;
+  bottom:max(18px,calc(env(safe-area-inset-bottom,0px) + 18px))!important;
+  margin:0!important;
+  width:90px!important;
+  height:44px!important;
+  display:flex!important;
+  flex-direction:row!important;
+  z-index:1000!important;
+  border-radius:12px!important;
+}
+body.duga-fullscreen .leaflet-control-zoom a{
+  width:44px!important;
+  height:44px!important;
+  line-height:44px!important;
+  flex:0 0 44px!important;
+  border-bottom:0!important;
+}
+body.duga-fullscreen .leaflet-control-zoom a+a{
+  border-left:1px solid #294156!important;
+}
 @media(max-height:690px){.top{padding-top:max(7px,env(safe-area-inset-top));padding-bottom:8px;gap:7px}.controls{padding-top:15px;gap:7px}.field input{padding:9px 10px}.point-tabs button,.radii button,.common-polygon-btn{min-height:36px}.search input{padding:10px 11px}.search button,.btn{min-height:39px}.fullscreen-btn,.layers-btn{width:44px;height:44px;min-height:44px}}
 @media(max-width:360px){.mode{display:none}.grid{grid-template-columns:1fr}.field label{font-size:8.5px}.search button{padding-inline:12px}.title b{font-size:22px}}
 </style>
