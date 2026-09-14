@@ -134,8 +134,8 @@ const MAP_LAYERS={
   },
   hot:{
     label:'Детальна',
-    url:'/tiles/hot/{z}/{x}/{y}.png?v=layers-1',
-    options:{maxZoom:19,updateWhenIdle:true,keepBuffer:3,attribution:'&copy; OpenStreetMap contributors · Humanitarian style'}
+    url:'/tiles/hot/{z}/{x}/{y}.png?v=layers-2',
+    options:{maxZoom:19,updateWhenIdle:true,keepBuffer:3,attribution:'Tiles &copy; Esri'}
   }
 };
 let activeMapLayer='standard',baseTiles=null;
@@ -145,7 +145,19 @@ function setBaseLayer(key){
   activeMapLayer=key;
   if(baseTiles){try{map.removeLayer(baseTiles)}catch(e){}}
   const cfg=MAP_LAYERS[key];
-  baseTiles=L.tileLayer(cfg.url,cfg.options).addTo(map);
+  let loaded=0,errors=0,fallbackStarted=false;
+  baseTiles=L.tileLayer(cfg.url,cfg.options);
+  baseTiles.on('tileload',()=>{loaded++;errors=0});
+  baseTiles.on('tileerror',()=>{
+    errors++;
+    if(key!=='standard'&&!fallbackStarted&&loaded===0&&errors>=2){
+      fallbackStarted=true;
+      const statusEl=document.getElementById('status');
+      if(statusEl)statusEl.textContent=cfg.label+' недоступна. Увімкнено стандартну карту.';
+      setTimeout(()=>setBaseLayer('standard'),0);
+    }
+  });
+  baseTiles.addTo(map);
   document.querySelectorAll('#layersMenu [data-layer]').forEach(btn=>btn.classList.toggle('active',btn.dataset.layer===key));
   try{localStorage.setItem('duga:map-layer',key)}catch(e){}
 }
