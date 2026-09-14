@@ -93,8 +93,8 @@ async function serveMapTile(request, ctx) {
   if (cached) return cached;
 
   const upstreams = [
-    `https://a.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
     `https://tile.openstreetmap.de/${z}/${x}/${y}.png`,
+    `https://a.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
   ];
 
   let upstream = null;
@@ -126,7 +126,7 @@ async function serveMapTile(request, ctx) {
   headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-France');
+  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-DE');
 
   const response = new Response(upstream.body, { status: 200, headers });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
