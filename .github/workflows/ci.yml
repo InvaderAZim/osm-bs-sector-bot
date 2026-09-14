@@ -67,3 +67,15 @@ jobs:
 
       - name: Bundle Worker with Wrangler
         run: npx wrangler deploy --dry-run
+
+      - name: Deploy Worker to Cloudflare
+        if: github.event_name == 'push' && github.ref == 'refs/heads/cloudflare-worker'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::GitHub secret CLOUDFLARE_API_TOKEN is not configured"
+            exit 1
+          fi
+          npx wrangler deploy
