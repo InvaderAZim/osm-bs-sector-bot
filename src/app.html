@@ -121,6 +121,25 @@ body.duga-fullscreen .leaflet-control-zoom a{
 body.duga-fullscreen .leaflet-control-zoom a+a{
   border-left:1px solid #294156!important;
 }
+body.duga-fullscreen .fullscreen-btn,
+body.duga-fullscreen .layers-btn,
+body.duga-fullscreen .leaflet-control-zoom,
+body.duga-fullscreen .layers-menu{
+  transform:translate3d(var(--duga-dock-x,0px),var(--duga-dock-y,0px),0)!important;
+}
+body.duga-fullscreen .fullscreen-btn,
+body.duga-fullscreen .layers-btn,
+body.duga-fullscreen .leaflet-control-zoom{
+  touch-action:none!important;
+  user-select:none!important;
+  -webkit-user-select:none!important;
+  cursor:grab!important;
+}
+body.duga-fullscreen.duga-dock-dragging .fullscreen-btn,
+body.duga-fullscreen.duga-dock-dragging .layers-btn,
+body.duga-fullscreen.duga-dock-dragging .leaflet-control-zoom{
+  cursor:grabbing!important;
+}
 @media(max-height:690px){.top{padding-top:max(7px,env(safe-area-inset-top));padding-bottom:8px;gap:7px}.controls{padding-top:15px;gap:7px}.field input{padding:9px 10px}.point-tabs button,.radii button,.common-polygon-btn{min-height:36px}.search input{padding:10px 11px}.search button,.btn{min-height:39px}.fullscreen-btn,.layers-btn{width:44px;height:44px;min-height:44px}}
 @media(max-width:360px){.mode{display:none}.grid{grid-template-columns:1fr}.field label{font-size:8.5px}.search button{padding-inline:12px}.title b{font-size:22px}}
 </style>
@@ -222,7 +241,88 @@ document.querySelectorAll('#pointTabs button').forEach(b=>b.onclick=()=>{activeI
 function showSearchMessage(message){const d=document.createElement('div');d.className='result';d.textContent=message;results.replaceChildren(d)}async function searchAddress(){const q=document.getElementById('address').value.trim();if(q.length<2)return;status.textContent='Пошук…';results.replaceChildren();results.style.display='block';try{const r=await fetch('/api/geocode?q='+encodeURIComponent(q));const data=await r.json();if(!r.ok){showSearchMessage(data.detail||'Помилка пошуку');return}if(!data.results?.length){showSearchMessage('Нічого не знайдено');return}data.results.forEach(item=>{const d=document.createElement('div');d.className='result';const label=document.createElement('span');label.textContent=String(item.label||'');const source=document.createElement('small');source.textContent=String(item.source||'OpenStreetMap');d.append(label,source);d.onclick=()=>{chooseFor(activeIndex,item.lat,item.lon);map.setView([item.lat,item.lon],16);results.style.display='none'};results.appendChild(d)})}catch(e){showSearchMessage('Помилка пошуку')}}document.getElementById('searchBtn').onclick=searchAddress;document.getElementById('address').onkeydown=e=>{if(e.key==='Enter')searchAddress()};
 function polyArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}function ccw(poly){return polyArea(poly)<0?[...poly].reverse():poly}function sectorPolygon(p){const poly=[{x:p.lon,y:p.lat}];for(let o=-60;o<=60;o+=2){const q=dest(p.lat,p.lon,p.bearing+o,p.radiusKm*1000);poly.push({x:q.lng,y:q.lat})}return ccw(poly)}function cross(a,b,p){return(b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x)}function lineInt(s,e,a,b){const dx1=e.x-s.x,dy1=e.y-s.y,dx2=b.x-a.x,dy2=b.y-a.y,den=dx1*dy2-dy1*dx2;if(Math.abs(den)<1e-15)return e;const t=((a.x-s.x)*dy2-(a.y-s.y)*dx2)/den;return{x:s.x+t*dx1,y:s.y+t*dy1}}function clip(subject,clipper){let out=[...subject];for(let j=0;j<clipper.length;j++){const a=clipper[j],b=clipper[(j+1)%clipper.length],input=out;out=[];if(!input.length)break;let s=input.at(-1);for(const e of input){const ei=cross(a,b,e)>=-1e-12,si=cross(a,b,s)>=-1e-12;if(ei){if(!si)out.push(lineInt(s,e,a,b));out.push(e)}else if(si)out.push(lineInt(s,e,a,b));s=e}}return out}function getCommonPolygon(){const active=points.filter(p=>p.lat!==null);if(active.length<2)return null;let inter=sectorPolygon(active[0]);for(let i=1;i<active.length&&inter.length>=3;i++)inter=clip(inter,sectorPolygon(active[i]));return inter.length>=3?inter:null}
 let commonPolygonLayer=null,commonPolygonMode=false;const commonBtn=document.getElementById('commonPolygonBtn');function restore(){points.forEach((p,i)=>{if(p.lat===null)return;if(p.marker&&!map.hasLayer(p.marker))p.marker.addTo(map);drawSector(i)})}function renderCommonPolygon(){if(!commonPolygonMode)return;const poly=getCommonPolygon();if(commonPolygonLayer){map.removeLayer(commonPolygonLayer);commonPolygonLayer=null}if(!poly){commonPolygonMode=false;commonBtn.classList.remove('active');commonBtn.textContent='◇ Спільний полігон';restore();status.textContent='Спільна область секторів відсутня.';return}points.forEach(p=>{if(p.sector&&map.hasLayer(p.sector))map.removeLayer(p.sector);if(p.marker&&map.hasLayer(p.marker))map.removeLayer(p.marker)});commonPolygonLayer=L.polygon(poly.map(p=>[p.y,p.x]),{color:'#facc15',weight:4,opacity:1,fill:false}).addTo(map);map.fitBounds(commonPolygonLayer.getBounds().pad(.2));status.textContent='Показано лише спільний полігон.'}commonBtn.onclick=()=>{if(commonPolygonMode){commonPolygonMode=false;if(commonPolygonLayer)map.removeLayer(commonPolygonLayer);commonPolygonLayer=null;restore();commonBtn.classList.remove('active');commonBtn.textContent='◇ Спільний полігон';fitAll()}else{const poly=getCommonPolygon();if(!poly){status.textContent=points.filter(p=>p.lat!==null).length<2?'Додайте щонайменше 2 точки.':'Сектори не мають спільної області.';return}commonPolygonMode=true;commonBtn.classList.add('active');commonBtn.textContent='↩ Показати сектори';renderCommonPolygon()}};
-const fullscreenBtn=document.getElementById('fullscreenBtn');function isFs(){return Boolean(document.fullscreenElement)||(tg&&Boolean(tg.isFullscreen))||document.body.classList.contains('duga-fullscreen')}function updFs(){fullscreenBtn.textContent='⛶';setTimeout(()=>map.invalidateSize(),80)}fullscreenBtn.onclick=async()=>{if(isFs()){document.body.classList.remove('duga-fullscreen');try{if(tg?.exitFullscreen)tg.exitFullscreen();else if(document.fullscreenElement)await document.exitFullscreen()}catch(e){}}else{document.body.classList.add('duga-fullscreen');try{if(tg?.requestFullscreen)tg.requestFullscreen();else if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else tg?.expand()}catch(e){tg?.expand()}}updFs()};document.addEventListener('fullscreenchange',updFs);
+const fullscreenBtn=document.getElementById('fullscreenBtn');
+let dockX=0,dockY=0,dockDragMoved=false;
+try{
+  const saved=JSON.parse(localStorage.getItem('duga:fullscreen-dock')||'null');
+  if(saved&&Number.isFinite(saved.x)&&Number.isFinite(saved.y)){dockX=saved.x;dockY=saved.y}
+}catch(e){}
+function applyDockOffset(){
+  document.body.style.setProperty('--duga-dock-x',dockX+'px');
+  document.body.style.setProperty('--duga-dock-y',dockY+'px');
+}
+applyDockOffset();
+function isFs(){return Boolean(document.fullscreenElement)||(tg&&Boolean(tg.isFullscreen))||document.body.classList.contains('duga-fullscreen')}
+function updFs(){fullscreenBtn.textContent='⛶';setTimeout(()=>map.invalidateSize(),80)}
+function dockElements(){
+  const zoom=map.zoomControl?.getContainer?.();
+  return [fullscreenBtn,layersBtn,zoom].filter(Boolean);
+}
+function setupFullscreenDock(){
+  const controls=dockElements();
+  const startDrag=e=>{
+    if(!document.body.classList.contains('duga-fullscreen'))return;
+    if(e.pointerType==='mouse'&&e.button!==0)return;
+    const rects=controls.map(el=>el.getBoundingClientRect());
+    const bounds={
+      left:Math.min(...rects.map(r=>r.left)),
+      top:Math.min(...rects.map(r=>r.top)),
+      right:Math.max(...rects.map(r=>r.right)),
+      bottom:Math.max(...rects.map(r=>r.bottom))
+    };
+    const sx=e.clientX,sy=e.clientY,startX=dockX,startY=dockY;
+    let moved=false;
+    const target=e.currentTarget;
+    try{target.setPointerCapture(e.pointerId)}catch(err){}
+    document.body.classList.add('duga-dock-dragging');
+    const move=ev=>{
+      const rawDx=ev.clientX-sx,rawDy=ev.clientY-sy;
+      if(!moved&&Math.hypot(rawDx,rawDy)<6)return;
+      moved=true;dockDragMoved=true;ev.preventDefault();
+      let dx=rawDx,dy=rawDy;
+      const margin=8;
+      if(bounds.left+dx<margin)dx=margin-bounds.left;
+      if(bounds.right+dx>window.innerWidth-margin)dx=window.innerWidth-margin-bounds.right;
+      if(bounds.top+dy<margin)dy=margin-bounds.top;
+      if(bounds.bottom+dy>window.innerHeight-margin)dy=window.innerHeight-margin-bounds.bottom;
+      dockX=startX+dx;dockY=startY+dy;applyDockOffset();
+      layersMenu.classList.remove('open');
+    };
+    const end=()=>{
+      document.body.classList.remove('duga-dock-dragging');
+      window.removeEventListener('pointermove',move,{capture:true});
+      window.removeEventListener('pointerup',end,{capture:true});
+      window.removeEventListener('pointercancel',end,{capture:true});
+      if(moved){
+        try{localStorage.setItem('duga:fullscreen-dock',JSON.stringify({x:dockX,y:dockY}))}catch(err){}
+        setTimeout(()=>{dockDragMoved=false},0);
+      }
+    };
+    window.addEventListener('pointermove',move,{capture:true,passive:false});
+    window.addEventListener('pointerup',end,{capture:true});
+    window.addEventListener('pointercancel',end,{capture:true});
+  };
+  controls.forEach(el=>el.addEventListener('pointerdown',startDrag,{passive:true}));
+  document.addEventListener('click',e=>{
+    if(!dockDragMoved)return;
+    if(controls.some(el=>el===e.target||el.contains(e.target))){
+      e.preventDefault();e.stopImmediatePropagation();dockDragMoved=false;
+    }
+  },true);
+}
+setupFullscreenDock();
+fullscreenBtn.onclick=async()=>{
+  if(isFs()){
+    document.body.classList.remove('duga-fullscreen');
+    try{if(tg?.exitFullscreen)tg.exitFullscreen();else if(document.fullscreenElement)await document.exitFullscreen()}catch(e){}
+  }else{
+    document.body.classList.add('duga-fullscreen');
+    applyDockOffset();
+    try{if(tg?.requestFullscreen)tg.requestFullscreen();else if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else tg?.expand()}catch(e){tg?.expand()}
+  }
+  updFs()
+};
+document.addEventListener('fullscreenchange',updFs);
 map.locate({setView:false,maxZoom:16});map.on('locationfound',e=>{if(points.every(p=>p.lat===null)){chooseFor(0,e.latlng.lat,e.latlng.lng);map.setView(e.latlng,15)}});syncControls();
 </script>
 </body>
