@@ -11,6 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
 <style>
 :root{
   color-scheme:dark;
@@ -101,42 +102,28 @@ body.duga-fullscreen .top,body.duga-fullscreen .controls{display:none}body.duga-
   <div class="status" id="status">Точка 1: натисніть на карту або знайдіть адресу.</div>
 </section>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
 <script>
 const tg=window.Telegram?.WebApp;
 document.documentElement.style.colorScheme='dark';
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#070b10');tg.setBackgroundColor('#070b10');if(tg.setBottomBarColor)tg.setBottomBarColor('#070b10')}catch(e){}}
 const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
-const OSM_ATTR='&copy; OpenStreetMap contributors';
-const TILE_PROVIDERS=[
-  {url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png',options:{maxZoom:19,attribution:OSM_ATTR}},
-  {url:'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',options:{subdomains:'abc',maxZoom:20,attribution:OSM_ATTR}},
-  {url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',options:{subdomains:'abcd',maxZoom:20,attribution:OSM_ATTR+' &copy; CARTO'}},
-  {url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',options:{maxZoom:19,attribution:'Tiles &copy; Esri'}}
-];
-let baseTiles=null,tileProviderIndex=0,tileSwitching=false,tileWatchdog=null;
-function loadTileProvider(index){
-  if(index>=TILE_PROVIDERS.length){
-    console.warn('DUGA: all tile providers failed');
+let baseTiles=null;
+function loadBaseMap(){
+  if(typeof L.maplibreGL==='function'){
+    baseTiles=L.maplibreGL({
+      style:'https://tiles.openfreemap.org/styles/liberty',
+      attribution:'OpenFreeMap © OpenMapTiles Data from OpenStreetMap'
+    }).addTo(map);
     return;
   }
-  tileProviderIndex=index;
-  tileSwitching=false;
-  if(tileWatchdog){clearTimeout(tileWatchdog);tileWatchdog=null}
-  if(baseTiles){try{map.removeLayer(baseTiles)}catch(e){}}
-  const provider=TILE_PROVIDERS[index];
-  baseTiles=L.tileLayer(provider.url,provider.options);
-  let loadedTiles=0,errors=0;
-  const fallback=()=>{
-    if(tileSwitching)return;
-    tileSwitching=true;
-    setTimeout(()=>loadTileProvider(index+1),0);
-  };
-  baseTiles.on('tileload',()=>{loadedTiles++;errors=0;if(tileWatchdog){clearTimeout(tileWatchdog);tileWatchdog=null}});
-  baseTiles.on('tileerror',()=>{errors++;if(loadedTiles===0&&errors>=2)fallback()});
-  baseTiles.addTo(map);
-  tileWatchdog=setTimeout(()=>{if(loadedTiles===0)fallback()},3500);
+  baseTiles=L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png',{
+    maxZoom:19,
+    attribution:'&copy; OpenStreetMap contributors'
+  }).addTo(map);
 }
-loadTileProvider(0);
+loadBaseMap();
 map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
 const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;function dest(lat,lon,bearing,distance){const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R,p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t)),l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return L.latLng(deg(p2),((deg(l2)+540)%360)-180)}
 const COLORS=[{css:'#dc2626',rgb:'220,38,38'},{css:'#2563eb',rgb:'37,99,235'},{css:'#16a34a',rgb:'22,163,74'}],points=[0,1,2].map(i=>({lat:null,lon:null,bearing:0,radiusKm:3,marker:null,sector:null,color:COLORS[i]}));let activeIndex=0;
