@@ -106,11 +106,11 @@ const tg=window.Telegram?.WebApp;
 document.documentElement.style.colorScheme='dark';
 if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#070b10');tg.setBackgroundColor('#070b10');if(tg.setBottomBarColor)tg.setBottomBarColor('#070b10')}catch(e){}}
 const map=L.map('map',{zoomControl:true,preferCanvas:true}).setView([50.2547,28.6587],11);
-let baseTiles=L.tileLayer('/tiles/{z}/{x}/{y}.png',{
+let baseTiles=L.tileLayer('/tiles/{z}/{x}/{y}.png?v=osm-carto-1',{
   maxZoom:19,
   updateWhenIdle:true,
   keepBuffer:3,
-  attribution:'Tiles &copy; Esri'
+  attribution:'&copy; OpenStreetMap contributors &copy; CARTO'
 }).addTo(map);
 map.createPane('sectorPane');map.getPane('sectorPane').style.zIndex='350';map.getPane('sectorPane').style.pointerEvents='none';
 const R=6371008.8,rad=x=>x*Math.PI/180,deg=x=>x*180/Math.PI;function dest(lat,lon,bearing,distance){const p1=rad(lat),l1=rad(lon),t=rad((bearing%360+360)%360),d=distance/R,p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t)),l2=l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return L.latLng(deg(p2),((deg(l2)+540)%360)-180)}
