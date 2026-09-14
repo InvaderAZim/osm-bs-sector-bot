@@ -72,8 +72,63 @@ function injectAnimations(html) {
   return output;
 }
 
+async function serveMapTile(request, ctx) {
+  const url = new URL(request.url);
+  const match = /^\/tiles\/(\d{1,2})\/(\d+)\/(\d+)\.png$/.exec(url.pathname);
+  if (!match) return null;
+
+  const z = Number(match[1]);
+  const x = Number(match[2]);
+  const y = Number(match[3]);
+  const limit = 2 ** z;
+  if (!Number.isInteger(z) || z < 0 || z > 19 ||
+      !Number.isInteger(x) || !Number.isInteger(y) ||
+      x < 0 || y < 0 || x >= limit || y >= limit) {
+    return new Response('Invalid tile coordinates', { status: 400 });
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString(), { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const upstreamUrl =
+    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`;
+
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      headers: {
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (error) {
+    console.warn('DUGA map tile upstream failed', error instanceof Error ? error.message : String(error));
+    return new Response('Map tile upstream unavailable', { status: 502 });
+  }
+
+  if (!upstream.ok) {
+    console.warn('DUGA map tile upstream status', upstream.status, z, x, y);
+    return new Response('Map tile unavailable', { status: 502 });
+  }
+
+  const headers = new Headers();
+  headers.set('Content-Type', upstream.headers.get('Content-Type') || 'image/jpeg');
+  headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
+  headers.set('Access-Control-Allow-Origin', '*');
+  headers.set('X-Content-Type-Options', 'nosniff');
+
+  const response = new Response(upstream.body, { status: 200, headers });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 export default {
   async fetch(request, env, ctx) {
+    const tileResponse = await serveMapTile(request, ctx);
+    if (tileResponse) return tileResponse;
+
     const response = await appWorker.fetch(request, env, ctx);
     const url = new URL(request.url);
     if (url.pathname !== '/api/app' || !response.ok) return response;
