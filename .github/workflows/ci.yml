@@ -79,3 +79,18 @@ jobs:
             exit 1
           fi
           npx wrangler deploy
+
+      - name: Verify live map tile
+        if: github.event_name == 'push' && github.ref == 'refs/heads/cloudflare-worker'
+        run: |
+          sleep 3
+          curl --fail --silent --show-error --retry 4 --retry-delay 2 \
+            -o /tmp/duga-map-tile \
+            https://osm-bs-sector-bot.kraplenii.workers.dev/tiles/11/1186/692.png
+          test -s /tmp/duga-map-tile
+          bytes=$(wc -c < /tmp/duga-map-tile)
+          if [ "$bytes" -lt 1000 ]; then
+            echo "::error::Live map tile response is unexpectedly small: $bytes bytes"
+            exit 1
+          fi
+          echo "Live map tile OK: $bytes bytes"
