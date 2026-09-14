@@ -92,8 +92,10 @@ async function serveMapTile(request, ctx) {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
+  const cartoHosts = ['a', 'b', 'c', 'd'];
+  const host = cartoHosts[(x + y) % cartoHosts.length];
   const upstreamUrl =
-    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${z}/${y}/${x}`;
+    `https://${host}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
 
   let upstream;
   try {
@@ -118,6 +120,7 @@ async function serveMapTile(request, ctx) {
   headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-CARTO-Voyager');
 
   const response = new Response(upstream.body, { status: 200, headers });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
