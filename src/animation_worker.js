@@ -92,26 +92,32 @@ async function serveMapTile(request, ctx) {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  const cartoHosts = ['a', 'b', 'c', 'd'];
-  const host = cartoHosts[(x + y) % cartoHosts.length];
-  const upstreamUrl =
-    `https://${host}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
+  const upstreams = [
+    `https://a.tile.openstreetmap.fr/osmfr/${z}/${x}/${y}.png`,
+    `https://tile.openstreetmap.de/${z}/${x}/${y}.png`,
+  ];
 
-  let upstream;
-  try {
-    upstream = await fetch(upstreamUrl, {
-      headers: {
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (error) {
-    console.warn('DUGA map tile upstream failed', error instanceof Error ? error.message : String(error));
-    return new Response('Map tile upstream unavailable', { status: 502 });
+  let upstream = null;
+  for (const upstreamUrl of upstreams) {
+    try {
+      const candidate = await fetch(upstreamUrl, {
+        headers: {
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Referer': 'https://osm-bs-sector-bot.kraplenii.workers.dev/',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (candidate.ok) {
+        upstream = candidate;
+        break;
+      }
+      console.warn('DUGA map tile upstream status', candidate.status, upstreamUrl, z, x, y);
+    } catch (error) {
+      console.warn('DUGA map tile upstream failed', upstreamUrl, error instanceof Error ? error.message : String(error));
+    }
   }
 
-  if (!upstream.ok) {
-    console.warn('DUGA map tile upstream status', upstream.status, z, x, y);
+  if (!upstream) {
     return new Response('Map tile unavailable', { status: 502 });
   }
 
@@ -120,7 +126,7 @@ async function serveMapTile(request, ctx) {
   headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-CARTO-Voyager');
+  headers.set('X-DUGA-Tile-Provider', 'OpenStreetMap-France');
 
   const response = new Response(upstream.body, { status: 200, headers });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
